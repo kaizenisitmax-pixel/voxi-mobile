@@ -732,6 +732,29 @@ Türkçe komutları anlayabilmelisin. Örneğin "Ahmet'e acil montaj görevi ver
             </View>
           </View>
         </Modal>
+
+        {/* VOXI Floating Button */}
+        <TouchableOpacity
+          onPress={() => router.push('/voxi-chat')}
+          style={{
+            position: 'absolute',
+            bottom: 90,
+            right: 20,
+            width: 56,
+            height: 56,
+            borderRadius: 28,
+            backgroundColor: '#1A1A1A',
+            alignItems: 'center',
+            justifyContent: 'center',
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.15,
+            shadowRadius: 8,
+            elevation: 8,
+          }}
+        >
+          <Text style={{ color: '#FFFFFF', fontSize: 16, fontWeight: '800' }}>V</Text>
+        </TouchableOpacity>
     </SafeAreaView>
   );
 }
