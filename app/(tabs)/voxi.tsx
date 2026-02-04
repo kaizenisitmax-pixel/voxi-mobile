@@ -118,6 +118,16 @@ export default function VoxiScreen() {
       .order('created_at', { ascending: false })
       .limit(30);
 
+    const { data: customers } = await supabase
+      .from('customers')
+      .select('id, company_name, contact_person, phone, status')
+      .limit(20);
+
+    const { data: stakeholders } = await supabase
+      .from('stakeholders')
+      .select('id, name, role_title, company')
+      .limit(20);
+
     const openTasks = tasks?.filter((t: any) => t.status !== 'done') || [];
     const doneTasks = tasks?.filter((t: any) => t.status === 'done') || [];
     const team = ['Ahmet', 'Mehmet', 'Ayşe', 'Ali', 'Volkan'];
@@ -134,7 +144,11 @@ AÇIK GÖREVLER (${openTasks.length}):
 ${openTasks.slice(0, 15).map((t: any) => `- "${t.title}" → ${t.assigned_to} [${t.priority}]`).join('\n')}
 TAMAMLANAN: ${doneTasks.length} görev
 EKİP DURUMU:
-${teamInfo}`;
+${teamInfo}
+MÜŞTERİLER (${customers?.length || 0}):
+${customers?.map(c => `- ${c.company_name} (${c.contact_person || '-'}) [${c.status}]`).join('\n') || 'Henüz müşteri kaydı yok'}
+PAYDAŞLAR (${stakeholders?.length || 0}):
+${stakeholders?.map(s => `- ${s.name} (${s.role_title || '-'}) @ ${s.company || '-'}`).join('\n') || 'Henüz paydaş kaydı yok'}`;
 
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -150,10 +164,14 @@ ${teamInfo}`;
             content: `Sen VOXI, küçük bir iş ekibinin AI asistanısın. 5 kişilik ekibin günlük operasyonlarını yönetiyorsun.
 
 YAPABİLECEKLERİN:
-1. Görev oluştur → JSON: {"action":"create_task","title":"...","assigned_to":"...","priority":"normal|urgent"}
-2. Görev tamamla → JSON: {"action":"complete_task","title":"..."}  
-3. Mesaj gönder → JSON: {"action":"send_message","to":"...","message":"..."}
-4. Bilgi ver → bağlamdan cevapla, JSON ekleme
+1. Görev kartı oluştur → JSON: {"action":"create_task","title":"...","assigned_to":"...","priority":"normal|urgent","what":"...","when":"...","where":"...","how":"...","why":"...","customer":"..."}
+2. Müşteri kartı oluştur → JSON: {"action":"create_customer","company_name":"...","contact_person":"...","phone":"...","email":"...","address":"...","sector":"..."}
+3. Paydaş kartı oluştur → JSON: {"action":"create_stakeholder","name":"...","role_title":"...","relationship":"...","phone":"...","email":"...","company":"..."}
+4. Görev tamamla → JSON: {"action":"complete_task","title":"..."}
+5. Mesaj gönder → JSON: {"action":"send_message","to":"...","message":"..."}
+6. Bilgi ver → bağlamdan cevapla
+7. Müşteri sorgula → müşteri kartını oku
+8. Görev ve müşteri bağla → JSON: {"action":"link_task_customer","task_title":"...","customer_name":"..."}
 
 KURALLAR:
 - Türkçe, samimi ama profesyonel konuş
@@ -196,8 +214,67 @@ ${context}`,
             workspace_id: 'd816ca01-3361-4992-8c2d-df50d5f39382',
             is_group: false,
             group_members: [cmd.assigned_to],
+            what_description: cmd.what,
+            when_details: cmd.when,
+            where_location: cmd.where,
+            how_expectations: cmd.how,
+            why_purpose: cmd.why,
           });
           if (!error) actions.push({ icon: 'checkmark-circle', label: `Görev oluşturuldu: "${cmd.title}" → ${cmd.assigned_to}` });
+        } else if (cmd.action === 'create_customer') {
+          const { error } = await supabase.from('customers').insert({
+            company_name: cmd.company_name,
+            contact_person: cmd.contact_person,
+            phone: cmd.phone,
+            email: cmd.email,
+            address: cmd.address,
+            sector: cmd.sector,
+            status: 'active',
+            created_by: 'Volkan',
+            owner: 'Volkan',
+            workspace_id: 'd816ca01-3361-4992-8c2d-df50d5f39382',
+          });
+          if (!error) {
+            actions.push({ icon: 'business', label: `Müşteri kartı oluşturuldu: ${cmd.company_name}` });
+            await supabase.from('activity_log').insert({
+              card_type: 'customer',
+              card_id: 'new',
+              action: 'created',
+              details: `${cmd.company_name} müşteri kartı oluşturuldu`,
+              performed_by: 'Volkan',
+            });
+          }
+          return { text: cleanText || `${cmd.company_name} müşteri kartı oluşturuldu.`, actions };
+        } else if (cmd.action === 'create_stakeholder') {
+          let customerId = null;
+          if (cmd.company) {
+            const { data: found } = await supabase.from('customers').select('id').ilike('company_name', `%${cmd.company}%`).limit(1);
+            if (found?.[0]) customerId = found[0].id;
+          }
+          const { error } = await supabase.from('stakeholders').insert({
+            name: cmd.name,
+            role_title: cmd.role_title,
+            relationship: cmd.relationship || 'Müşteri',
+            phone: cmd.phone,
+            email: cmd.email,
+            company: cmd.company,
+            customer_id: customerId,
+            created_by: 'Volkan',
+            owner: 'Volkan',
+            workspace_id: 'd816ca01-3361-4992-8c2d-df50d5f39382',
+          });
+          if (!error) {
+            actions.push({ icon: 'person', label: `Paydaş kartı oluşturuldu: ${cmd.name}` });
+          }
+          return { text: cleanText || `${cmd.name} paydaş kartı oluşturuldu.`, actions };
+        } else if (cmd.action === 'link_task_customer') {
+          const { data: customer } = await supabase.from('customers').select('id').ilike('company_name', `%${cmd.customer_name}%`).limit(1);
+          const { data: task } = await supabase.from('tasks').select('id').ilike('title', `%${cmd.task_title}%`).limit(1);
+          if (customer?.[0] && task?.[0]) {
+            await supabase.from('tasks').update({ customer_id: customer[0].id }).eq('id', task[0].id);
+            actions.push({ icon: 'link', label: `"${cmd.task_title}" → ${cmd.customer_name} bağlandı` });
+          }
+          return { text: cleanText || 'Görev ve müşteri bağlandı.', actions };
         } else if (cmd.action === 'complete_task') {
           const { data: found } = await supabase.from('tasks').select('id').ilike('title', `%${cmd.title}%`).eq('status', 'open').limit(1);
           if (found?.[0]) {
@@ -334,11 +411,11 @@ ${context}`,
   // Hızlı öneri chip'leri
   const suggestions = [
     'Açık görevleri göster',
+    'Yeni müşteri kartı oluştur',
     'Ahmet ne durumda?',
     'Acil görevler',
+    'Müşteri listesi',
     'Haftalık özet',
-    'Yeni görev oluştur',
-    'En son ne yapıldı?',
   ];
 
   return (
