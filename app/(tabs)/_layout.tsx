@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
-import { StyleSheet } from 'react-native';
+import { View, Text } from 'react-native';
 
 export default function TabLayout() {
   return (
@@ -31,7 +31,7 @@ export default function TabLayout() {
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
               name={focused ? 'chatbubbles' : 'chatbubbles-outline'}
-              size={24}
+              size={22}
               color={color}
             />
           ),
@@ -44,12 +44,48 @@ export default function TabLayout() {
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
               name={focused ? 'checkmark-circle' : 'checkmark-circle-outline'}
-              size={24}
+              size={22}
               color={color}
             />
           ),
         }}
       />
+
+      {/* VOXI - Ortadaki özel buton */}
+      <Tabs.Screen
+        name="voxi"
+        options={{
+          title: '',
+          tabBarIcon: ({ focused }) => (
+            <View style={{
+              width: 48,
+              height: 48,
+              borderRadius: 24,
+              backgroundColor: '#1A1A1A',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: 20,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.15,
+              shadowRadius: 6,
+              elevation: 5,
+            }}>
+              <View style={{
+                width: 20,
+                height: 20,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}>
+                {/* Sparkle/AI ikonu */}
+                <Ionicons name="sparkles" size={20} color="#FFFFFF" />
+              </View>
+            </View>
+          ),
+          tabBarLabel: () => null,
+        }}
+      />
+
       <Tabs.Screen
         name="team"
         options={{
@@ -57,7 +93,7 @@ export default function TabLayout() {
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
               name={focused ? 'people' : 'people-outline'}
-              size={24}
+              size={22}
               color={color}
             />
           ),
@@ -70,14 +106,14 @@ export default function TabLayout() {
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
               name={focused ? 'settings' : 'settings-outline'}
-              size={24}
+              size={22}
               color={color}
             />
           ),
         }}
       />
-      
-      {/* Hidden screen */}
+
+      {/* Hidden screens */}
       <Tabs.Screen name="newTask" options={{ href: null }} />
     </Tabs>
   );

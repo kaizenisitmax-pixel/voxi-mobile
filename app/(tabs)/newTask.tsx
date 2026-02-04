@@ -279,7 +279,7 @@ export default function NewTaskScreen() {
 
         {/* VOXI Banner */}
         <TouchableOpacity
-          onPress={() => router.push('/voxi-chat')}
+          onPress={() => router.push('/(tabs)/voxi')}
           style={{
             flexDirection: 'row', alignItems: 'center',
             backgroundColor: '#F5F3EF', borderRadius: 10,
@@ -292,7 +292,7 @@ export default function NewTaskScreen() {
             backgroundColor: '#1A1A1A',
             alignItems: 'center', justifyContent: 'center',
           }}>
-            <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '800' }}>V</Text>
+            <Ionicons name="sparkles" size={12} color="#FFFFFF" />
           </View>
           <Text style={{ fontSize: 14, color: '#3C3C43', flex: 1 }}>
             VOXI'ye söyleyerek de görev oluşturabilirsin
