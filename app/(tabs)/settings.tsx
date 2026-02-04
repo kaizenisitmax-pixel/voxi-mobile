@@ -34,6 +34,12 @@ const C = {
 
 const STORAGE_KEY = 'kalfa_quick_messages';
 
+interface TeamMember {
+  id: string;
+  name: string;
+  role: 'admin' | 'manager' | 'member';
+}
+
 export default function SettingsScreen() {
   const [quickMessages, setQuickMessages] = useState<string[]>([]);
   const [newMsg, setNewMsg] = useState('');
@@ -44,10 +50,14 @@ export default function SettingsScreen() {
   const [loadingReport, setLoadingReport] = useState(false);
   
   const [voiceEnabled, setVoiceEnabled] = useState(false);
+  
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const currentUserRole = 'admin'; // Şimdilik Volkan admin
 
   useFocusEffect(
     useCallback(() => {
       loadMessages();
+      fetchTeamMembers();
     }, [])
   );
 
@@ -123,6 +133,50 @@ export default function SettingsScreen() {
     setLoadingReport(false);
   }
 
+  async function fetchTeamMembers() {
+    const { data } = await supabase
+      .from('team_members')
+      .select('*')
+      .order('name', { ascending: true });
+    
+    if (data) {
+      setTeamMembers(data);
+    }
+  }
+
+  async function updateRole(memberId: string, newRole: 'admin' | 'manager' | 'member') {
+    await supabase
+      .from('team_members')
+      .update({ role: newRole })
+      .eq('id', memberId);
+    
+    fetchTeamMembers();
+  }
+
+  function changeRole(member: TeamMember) {
+    Alert.alert(
+      'Rol Değiştir',
+      `${member.name} için yeni rol seç`,
+      [
+        { text: 'Yönetici', onPress: () => updateRole(member.id, 'admin') },
+        { text: 'Müdür', onPress: () => updateRole(member.id, 'manager') },
+        { text: 'Üye', onPress: () => updateRole(member.id, 'member') },
+        { text: 'İptal', style: 'cancel' },
+      ]
+    );
+  }
+
+  function getRoleBadgeStyle(role: 'admin' | 'manager' | 'member') {
+    switch (role) {
+      case 'admin':
+        return { bg: '#1A1A1A', text: '#FFFFFF', label: 'Yönetici' };
+      case 'manager':
+        return { bg: '#F5F3EF', text: '#3C3C43', label: 'Müdür' };
+      case 'member':
+        return { bg: '#E5E5EA', text: '#8E8E93', label: 'Üye' };
+    }
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
@@ -184,7 +238,64 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Group 3 */}
+        {/* Group 3 - Ekip Yönetimi (Admin Only) */}
+        {currentUserRole === 'admin' && teamMembers.length > 0 && (
+          <View style={{ backgroundColor: '#FFFFFF', marginBottom: 35 }}>
+            <View style={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 8 }}>
+              <Text style={{ fontSize: 12, fontWeight: '600', color: '#8E8E93', letterSpacing: 0.5 }}>
+                EKİP YÖNETİMİ
+              </Text>
+            </View>
+            
+            {teamMembers.map((member, index) => {
+              const badge = getRoleBadgeStyle(member.role);
+              return (
+                <View key={member.id}>
+                  {index > 0 && <View style={{ height: 0.5, backgroundColor: '#F2F2F7', marginLeft: 78 }} />}
+                  <TouchableOpacity
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 20 }}
+                    activeOpacity={0.7}
+                    onPress={() => changeRole(member)}
+                  >
+                    <View style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 18,
+                      backgroundColor: '#E5E5EA',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginRight: 12,
+                    }}>
+                      <Text style={{ fontSize: 15, fontWeight: '600', color: '#3C3C43' }}>
+                        {member.name[0]}
+                      </Text>
+                    </View>
+                    
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 17, color: '#1A1A1A' }}>{member.name}</Text>
+                    </View>
+                    
+                    <View style={{
+                      backgroundColor: badge.bg,
+                      paddingHorizontal: 10,
+                      paddingVertical: 4,
+                      borderRadius: 6,
+                      marginRight: 8,
+                    }}>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: badge.text }}>
+                        {badge.label.toUpperCase()}
+                      </Text>
+                    </View>
+                    
+                    <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
+        {/* Group 4 */}
         <View style={{ backgroundColor: '#FFFFFF', marginBottom: 35 }}>
           <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 20 }} activeOpacity={0.7}>
             <Ionicons name="information-circle-outline" size={22} color="#3C3C43" style={{ width: 32 }} />
