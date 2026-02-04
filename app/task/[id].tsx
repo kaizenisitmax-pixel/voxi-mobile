@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
+import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
@@ -14,6 +15,7 @@ import {
   Modal,
   Platform,
   SafeAreaView,
+  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -72,6 +74,32 @@ interface Task {
   created_at: string;
   is_group?: boolean;
   group_members?: string[];
+  what_description?: string;
+  when_details?: string;
+  where_location?: string;
+  how_expectations?: string;
+  why_purpose?: string;
+  customer_id?: string;
+}
+
+interface CardNote {
+  id: string;
+  card_type: string;
+  card_id: string;
+  content: string;
+  created_by: string;
+  created_at: string;
+}
+
+interface CardFile {
+  id: string;
+  card_type: string;
+  card_id: string;
+  file_type: 'image' | 'document' | 'audio';
+  file_url: string;
+  file_name: string;
+  created_by: string;
+  created_at: string;
 }
 
 export default function TaskDetail() {
@@ -95,6 +123,8 @@ export default function TaskDetail() {
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [showStarredOnly, setShowStarredOnly] = useState(false);
   const [showMediaGallery, setShowMediaGallery] = useState(false);
+  const [notes, setNotes] = useState<CardNote[]>([]);
+  const [files, setFiles] = useState<CardFile[]>([]);
 
   const flatListRef = useRef<FlatList>(null);
 
@@ -102,6 +132,8 @@ export default function TaskDetail() {
     if (id) {
       fetchTask();
       fetchMessages();
+      fetchNotes();
+      fetchFiles();
     }
   }, [id]);
 
@@ -130,6 +162,26 @@ export default function TaskDetail() {
       
       await markMessagesAsRead();
     }
+  }
+
+  async function fetchNotes() {
+    const { data } = await supabase
+      .from('card_notes')
+      .select('*')
+      .eq('card_type', 'task')
+      .eq('card_id', id)
+      .order('created_at', { ascending: false });
+    if (data) setNotes(data);
+  }
+
+  async function fetchFiles() {
+    const { data } = await supabase
+      .from('card_files')
+      .select('*')
+      .eq('card_type', 'task')
+      .eq('card_id', id)
+      .order('created_at', { ascending: false });
+    if (data) setFiles(data);
   }
 
   async function markMessagesAsRead() {
@@ -322,6 +374,104 @@ export default function TaskDetail() {
     const result = await summarizeTask(messages);
     setSummary(result);
     setLoadingSummary(false);
+  }
+
+  async function update5N1K(field: string, currentValue: string, label: string) {
+    Alert.prompt(
+      label,
+      `Mevcut: ${currentValue || 'Belirtilmedi'}`,
+      [
+        { text: 'İptal', style: 'cancel' },
+        {
+          text: 'Kaydet',
+          onPress: async (text) => {
+            if (text !== undefined) {
+              await supabase.from('tasks').update({ [field]: text }).eq('id', id);
+              fetchTask();
+            }
+          },
+        },
+      ],
+      'plain-text',
+      currentValue
+    );
+  }
+
+  async function addNote() {
+    Alert.prompt(
+      'Not Ekle',
+      'Not içeriği',
+      [
+        { text: 'İptal', style: 'cancel' },
+        {
+          text: 'Ekle',
+          onPress: async (text) => {
+            if (text && text.trim()) {
+              await supabase.from('card_notes').insert({
+                card_type: 'task',
+                card_id: id,
+                content: text.trim(),
+                created_by: 'Volkan',
+              });
+              fetchNotes();
+            }
+          },
+        },
+      ],
+      'plain-text'
+    );
+  }
+
+  async function addImageFile() {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images',
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      await supabase.from('card_files').insert({
+        card_type: 'task',
+        card_id: id,
+        file_type: 'image',
+        file_url: result.assets[0].uri,
+        file_name: 'photo.jpg',
+        created_by: 'Volkan',
+      });
+      fetchFiles();
+    }
+  }
+
+  async function addDocumentFile() {
+    const result = await DocumentPicker.getDocumentAsync({ type: '*/*' });
+    if (!result.canceled && result.assets[0]) {
+      await supabase.from('card_files').insert({
+        card_type: 'task',
+        card_id: id,
+        file_type: 'document',
+        file_url: result.assets[0].uri,
+        file_name: result.assets[0].name,
+        created_by: 'Volkan',
+      });
+      fetchFiles();
+    }
+  }
+
+  async function deleteTask() {
+    Alert.alert(
+      'Görevi Sil',
+      'Bu görevi silmek istediğinize emin misiniz? Bu işlem geri alınamaz.',
+      [
+        { text: 'İptal', style: 'cancel' },
+        {
+          text: 'Sil',
+          style: 'destructive',
+          onPress: async () => {
+            await supabase.from('tasks').delete().eq('id', id);
+            router.back();
+          },
+        },
+      ]
+    );
   }
 
   function getFilteredMessages() {
@@ -726,128 +876,370 @@ export default function TaskDetail() {
           )}
         </View>
 
-        {/* Bottom Sheet Menu */}
+        {/* Task Detail Modal - Full Screen */}
         <Modal
           visible={showOptionsMenu}
           animationType="slide"
-          transparent={true}
+          presentationStyle="pageSheet"
           onRequestClose={() => setShowOptionsMenu(false)}
         >
-          <TouchableOpacity
-            style={styles.menuOverlay}
-            activeOpacity={1}
-            onPress={() => setShowOptionsMenu(false)}
-          >
-            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
-              <View style={styles.menuContainer}>
-                <View style={styles.dragIndicator} />
+          <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
+            {/* Modal Header */}
+            <View style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingHorizontal: 20,
+              paddingVertical: 12,
+              backgroundColor: C.surface,
+              borderBottomWidth: 0.5,
+              borderBottomColor: C.border,
+            }}>
+              <TouchableOpacity onPress={() => setShowOptionsMenu(false)}>
+                <Text style={{ fontSize: 16, color: '#007AFF' }}>Kapat</Text>
+              </TouchableOpacity>
+              <Text style={{ fontSize: 17, fontWeight: '600', color: C.text }}>Görev Kartı</Text>
+              <View style={{ width: 50 }} />
+            </View>
 
-                {/* Task Info */}
-                <View style={styles.menuSection}>
-                  <Text style={styles.menuSectionTitle}>GÖREV BİLGİLERİ</Text>
-                  <View style={styles.infoRow}>
-                    <Text style={styles.infoLabel}>Atanan:</Text>
-                    <Text style={styles.infoValue}>{task?.assigned_to}</Text>
-                  </View>
-                  <View style={styles.infoSep} />
-                  <View style={styles.infoRow}>
-                    <Text style={styles.infoLabel}>Durum:</Text>
-                    <Text style={styles.infoValue}>
-                      {task?.status === 'open'
-                        ? 'Açık'
-                        : task?.status === 'done'
-                        ? 'Tamamlandı'
-                        : 'Devam ediyor'}
-                    </Text>
-                  </View>
-                  {task?.due_date && (
-                    <>
-                      <View style={styles.infoSep} />
-                      <View style={styles.infoRow}>
-                        <Text style={styles.infoLabel}>Termin:</Text>
-                        <Text style={styles.infoValue}>
-                          {new Date(task.due_date).toLocaleDateString('tr-TR')}
-                        </Text>
-                      </View>
-                    </>
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 30 }}>
+              {/* BÖLÜM 1 - GÖREV BAŞLIĞI */}
+              <View style={{ backgroundColor: C.surface, padding: 20, marginBottom: 8 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+                  <Text style={{ fontSize: 22, fontWeight: '700', color: C.text, flex: 1 }}>
+                    {task?.title}
+                  </Text>
+                  {task?.priority === 'urgent' ? (
+                    <View style={{ backgroundColor: '#FF3B30', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 }}>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#FFFFFF' }}>ACİL</Text>
+                    </View>
+                  ) : task?.status === 'done' ? (
+                    <View style={{ backgroundColor: '#E5E5EA', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 }}>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#8E8E93' }}>TAMAMLANDI</Text>
+                    </View>
+                  ) : (
+                    <View style={{ backgroundColor: '#E5E5EA', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 }}>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#8E8E93' }}>NORMAL</Text>
+                    </View>
                   )}
                 </View>
+                <Text style={{ fontSize: 13, color: C.textTer, marginTop: 6 }}>
+                  {task?.created_at ? new Date(task.created_at).toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', year: 'numeric' }) : ''}
+                </Text>
+              </View>
 
-                {/* Status Buttons */}
-                {task?.status !== 'done' && (
-                  <View style={styles.menuSection}>
-                    <Text style={styles.menuSectionTitle}>DURUMU DEĞİŞTİR</Text>
-                    <View style={styles.statusBtnRow}>
-                      {task?.status !== 'in_progress' && (
-                        <TouchableOpacity
-                          style={[styles.statusBtn, { backgroundColor: '#F5F3EF' }]}
-                          onPress={() => {
-                            updateTaskStatus('in_progress');
-                            setShowOptionsMenu(false);
-                          }}
-                        >
-                          <Text style={{ fontSize: 15, fontWeight: '600', color: '#1A1A1A' }}>Başladım</Text>
-                        </TouchableOpacity>
-                      )}
+              {/* BÖLÜM 2 - 5N1K BİLGİLERİ */}
+              <View style={{ backgroundColor: C.surface, paddingTop: 20, paddingHorizontal: 20, marginBottom: 8 }}>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: C.textTer, letterSpacing: 0.5, marginBottom: 12 }}>5N1K</Text>
+                
+                <TouchableOpacity onPress={() => update5N1K('what_description', task?.what_description || '', '📋 NE')}>
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 12 }}>
+                    <Text style={{ fontSize: 15, color: C.textSec, width: 100 }}>📋 NE:</Text>
+                    <Text style={{ fontSize: 15, color: C.text, flex: 1 }}>
+                      {task?.what_description || task?.title || 'Belirtilmedi'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+                <View style={{ height: 0.5, backgroundColor: C.border }} />
+
+                <TouchableOpacity onPress={() => update5N1K('when_details', task?.when_details || '', '🕐 NE ZAMAN')}>
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 12 }}>
+                    <Text style={{ fontSize: 15, color: C.textSec, width: 100 }}>🕐 NE ZAMAN:</Text>
+                    <Text style={{ fontSize: 15, color: C.text, flex: 1 }}>
+                      {task?.when_details || (task?.due_date ? new Date(task.due_date).toLocaleDateString('tr-TR') : 'Belirtilmedi')}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+                <View style={{ height: 0.5, backgroundColor: C.border }} />
+
+                <TouchableOpacity onPress={() => update5N1K('where_location', task?.where_location || '', '📍 NEREDE')}>
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 12 }}>
+                    <Text style={{ fontSize: 15, color: C.textSec, width: 100 }}>📍 NEREDE:</Text>
+                    <Text style={{ fontSize: 15, color: C.text, flex: 1 }}>
+                      {task?.where_location || 'Belirtilmedi'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+                <View style={{ height: 0.5, backgroundColor: C.border }} />
+
+                <TouchableOpacity onPress={() => update5N1K('how_expectations', task?.how_expectations || '', '🔧 NASIL')}>
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 12 }}>
+                    <Text style={{ fontSize: 15, color: C.textSec, width: 100 }}>🔧 NASIL:</Text>
+                    <Text style={{ fontSize: 15, color: C.text, flex: 1 }}>
+                      {task?.how_expectations || 'Belirtilmedi'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+                <View style={{ height: 0.5, backgroundColor: C.border }} />
+
+                <TouchableOpacity onPress={() => update5N1K('why_purpose', task?.why_purpose || '', '🎯 NEDEN')}>
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 12 }}>
+                    <Text style={{ fontSize: 15, color: C.textSec, width: 100 }}>🎯 NEDEN:</Text>
+                    <Text style={{ fontSize: 15, color: C.text, flex: 1 }}>
+                      {task?.why_purpose || 'Belirtilmedi'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+                <View style={{ height: 0.5, backgroundColor: C.border }} />
+
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 12 }}>
+                  <Text style={{ fontSize: 15, color: C.textSec, width: 100 }}>👤 KİM:</Text>
+                  <Text style={{ fontSize: 15, color: C.text, flex: 1 }}>
+                    {task?.customer_id ? 'Müşteri bağlı' : 'Müşteri bağla'}
+                  </Text>
+                </View>
+              </View>
+
+              {/* BÖLÜM 3 - ATAMA */}
+              <View style={{ backgroundColor: C.surface, paddingTop: 20, paddingHorizontal: 20, marginBottom: 8 }}>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: C.textTer, letterSpacing: 0.5, marginBottom: 12 }}>ATAMA</Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12 }}>
+                  <Text style={{ fontSize: 15, color: C.textSec }}>Atanan:</Text>
+                  <Text style={{ fontSize: 15, fontWeight: '500', color: C.text }}>{task?.assigned_to}</Text>
+                </View>
+                <View style={{ height: 0.5, backgroundColor: C.border }} />
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12 }}>
+                  <Text style={{ fontSize: 15, color: C.textSec }}>Oluşturan:</Text>
+                  <Text style={{ fontSize: 15, fontWeight: '500', color: C.text }}>{task?.created_by}</Text>
+                </View>
+                {task?.is_group && task?.group_members && (
+                  <>
+                    <View style={{ height: 0.5, backgroundColor: C.border }} />
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12 }}>
+                      <Text style={{ fontSize: 15, color: C.textSec }}>Grup üyeleri:</Text>
+                      <Text style={{ fontSize: 15, fontWeight: '500', color: C.text }}>{task.group_members.join(', ')}</Text>
+                    </View>
+                  </>
+                )}
+              </View>
+
+              {/* BÖLÜM 4 - DURUMU DEĞİŞTİR */}
+              {task?.status !== 'done' && (
+                <View style={{ backgroundColor: C.surface, padding: 20, marginBottom: 8 }}>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: C.textTer, letterSpacing: 0.5, marginBottom: 12 }}>DURUMU DEĞİŞTİR</Text>
+                  <View style={{ flexDirection: 'row', gap: 12 }}>
+                    {task?.status !== 'in_progress' && (
                       <TouchableOpacity
-                        style={[styles.statusBtn, { backgroundColor: '#1A1A1A' }]}
+                        style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#F5F3EF', alignItems: 'center' }}
                         onPress={() => {
-                          updateTaskStatus('done');
+                          updateTaskStatus('in_progress');
                           setShowOptionsMenu(false);
                         }}
                       >
-                        <Text style={styles.statusBtnText}>Tamamla</Text>
+                        <Text style={{ fontSize: 15, fontWeight: '600', color: '#1A1A1A' }}>Başladım</Text>
                       </TouchableOpacity>
-                    </View>
-                  </View>
-                )}
-
-                {/* Tools */}
-                <View style={styles.menuSection}>
-                  <Text style={styles.menuSectionTitle}>ARAÇLAR</Text>
-                  <View style={styles.toolsRow}>
+                    )}
                     <TouchableOpacity
-                      style={styles.toolBtn}
+                      style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#1A1A1A', alignItems: 'center' }}
                       onPress={() => {
-                        setShowOptionsMenu(false);
-                        generateSummary();
-                      }}
-                    >
-                      <Ionicons name="sparkles-outline" size={18} color={C.text} style={styles.toolIcon} />
-                      <Text style={styles.toolLabel}>AI Özet</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={styles.toolBtn}
-                      onPress={() => {
-                        setShowStarredOnly(!showStarredOnly);
+                        updateTaskStatus('done');
                         setShowOptionsMenu(false);
                       }}
                     >
-                      <Ionicons
-                        name={showStarredOnly ? 'star' : 'star-outline'}
-                        size={18}
-                        color={C.text}
-                        style={styles.toolIcon}
-                      />
-                      <Text style={styles.toolLabel}>Yıldızlı</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={styles.toolBtn}
-                      onPress={() => {
-                        setShowOptionsMenu(false);
-                        setShowMediaGallery(true);
-                      }}
-                    >
-                      <Ionicons name="images-outline" size={18} color={C.text} style={styles.toolIcon} />
-                      <Text style={styles.toolLabel}>Medya</Text>
+                      <Text style={{ fontSize: 15, fontWeight: '600', color: '#FFFFFF' }}>Tamamla</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
+              )}
+
+              {/* BÖLÜM 5 - MÜŞTERİ/FİRMA */}
+              <View style={{ backgroundColor: C.surface, padding: 20, marginBottom: 8 }}>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: C.textTer, letterSpacing: 0.5, marginBottom: 12 }}>FİRMA / MÜŞTERİ</Text>
+                {task?.customer_id ? (
+                  <View>
+                    <Text style={{ fontSize: 15, color: C.text }}>Firma bilgisi bağlı</Text>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    style={{
+                      borderWidth: 1.5,
+                      borderColor: C.border,
+                      borderStyle: 'dashed',
+                      borderRadius: 10,
+                      padding: 16,
+                      alignItems: 'center',
+                      backgroundColor: '#FAFAFA',
+                    }}
+                    onPress={() => {
+                      Alert.alert('Müşteri Ekle', 'Bu özellik yakında eklenecek.');
+                    }}
+                  >
+                    <Ionicons name="business-outline" size={24} color={C.textTer} />
+                    <Text style={{ fontSize: 14, color: C.textSec, marginTop: 8 }}>Firma bilgisi ekle</Text>
+                    <Text style={{ fontSize: 12, color: C.textTer, marginTop: 2 }}>İsim, telefon, e-posta, adres</Text>
+                  </TouchableOpacity>
+                )}
               </View>
-            </TouchableOpacity>
-          </TouchableOpacity>
+
+              {/* BÖLÜM 6 - NOTLAR */}
+              <View style={{ backgroundColor: C.surface, padding: 20, marginBottom: 8 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: C.textTer, letterSpacing: 0.5 }}>NOTLAR</Text>
+                  <TouchableOpacity onPress={addNote}>
+                    <Ionicons name="add" size={22} color={C.text} />
+                  </TouchableOpacity>
+                </View>
+                {notes.length === 0 ? (
+                  <Text style={{ fontSize: 14, color: C.textTer, textAlign: 'center', paddingVertical: 16 }}>Henüz not eklenmedi</Text>
+                ) : (
+                  notes.map((note, i) => (
+                    <View key={note.id}>
+                      {i > 0 && <View style={{ height: 0.5, backgroundColor: C.border, marginVertical: 12 }} />}
+                      <Text style={{ fontSize: 15, color: C.text, lineHeight: 22 }}>{note.content}</Text>
+                      <Text style={{ fontSize: 12, color: C.textTer, marginTop: 4 }}>
+                        {note.created_by} · {new Date(note.created_at).toLocaleDateString('tr-TR')}
+                      </Text>
+                    </View>
+                  ))
+                )}
+              </View>
+
+              {/* BÖLÜM 7 - DOSYALAR */}
+              <View style={{ backgroundColor: C.surface, padding: 20, marginBottom: 8 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: C.textTer, letterSpacing: 0.5 }}>DOSYALAR</Text>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
+                  <TouchableOpacity
+                    style={{
+                      width: 70, height: 70,
+                      borderWidth: 1.5,
+                      borderColor: C.border,
+                      borderStyle: 'dashed',
+                      borderRadius: 8,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: '#FAFAFA',
+                    }}
+                    onPress={addImageFile}
+                  >
+                    <Ionicons name="camera-outline" size={22} color={C.textTer} />
+                    <Text style={{ fontSize: 10, color: C.textTer, marginTop: 4 }}>Fotoğraf</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={{
+                      width: 70, height: 70,
+                      borderWidth: 1.5,
+                      borderColor: C.border,
+                      borderStyle: 'dashed',
+                      borderRadius: 8,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: '#FAFAFA',
+                    }}
+                    onPress={addDocumentFile}
+                  >
+                    <Ionicons name="document-outline" size={22} color={C.textTer} />
+                    <Text style={{ fontSize: 10, color: C.textTer, marginTop: 4 }}>Dosya</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={{
+                      width: 70, height: 70,
+                      borderWidth: 1.5,
+                      borderColor: C.border,
+                      borderStyle: 'dashed',
+                      borderRadius: 8,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: '#FAFAFA',
+                    }}
+                    onPress={() => Alert.alert('Ses', 'Bu özellik yakında eklenecek.')}
+                  >
+                    <Ionicons name="mic-outline" size={22} color={C.textTer} />
+                    <Text style={{ fontSize: 10, color: C.textTer, marginTop: 4 }}>Ses</Text>
+                  </TouchableOpacity>
+                </View>
+                {files.length > 0 && (
+                  <View>
+                    {files.map((file) => (
+                      <View key={file.id} style={{ paddingVertical: 8 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                          <Ionicons
+                            name={file.file_type === 'image' ? 'image-outline' : 'document-outline'}
+                            size={18}
+                            color={C.textSec}
+                          />
+                          <Text style={{ fontSize: 14, color: C.text, flex: 1 }}>{file.file_name}</Text>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+
+              {/* BÖLÜM 8 - ARAÇLAR */}
+              <View style={{ backgroundColor: C.surface, paddingTop: 20, paddingHorizontal: 20, marginBottom: 8 }}>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: C.textTer, letterSpacing: 0.5, marginBottom: 12 }}>ARAÇLAR</Text>
+                
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14 }}
+                  onPress={() => {
+                    setShowOptionsMenu(false);
+                    generateSummary();
+                  }}
+                >
+                  <Ionicons name="sparkles-outline" size={20} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 16, color: C.text }}>AI Özet</Text>
+                    <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>Konuşmanın özetini oluştur</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+                </TouchableOpacity>
+                <View style={{ height: 0.5, backgroundColor: C.border }} />
+
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14 }}
+                  onPress={() => {
+                    setShowStarredOnly(!showStarredOnly);
+                    setShowOptionsMenu(false);
+                  }}
+                >
+                  <Ionicons name="star-outline" size={20} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 16, color: C.text }}>Yıldızlı Mesajlar</Text>
+                    <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>Önemli mesajları göster</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+                </TouchableOpacity>
+                <View style={{ height: 0.5, backgroundColor: C.border }} />
+
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14 }}
+                  onPress={() => {
+                    setShowOptionsMenu(false);
+                    setShowMediaGallery(true);
+                  }}
+                >
+                  <Ionicons name="images-outline" size={20} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 16, color: C.text }}>Medya Galerisi</Text>
+                    <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>Tüm fotoğrafları görüntüle</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+                </TouchableOpacity>
+                <View style={{ height: 0.5, backgroundColor: C.border }} />
+
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14 }}
+                  onPress={() => Alert.alert('Hatırlatma', 'Bu özellik yakında eklenecek.')}
+                >
+                  <Ionicons name="notifications-outline" size={20} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 16, color: C.text }}>Hatırlatma Kur</Text>
+                    <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>Bu görev için hatırlatıcı ayarla</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+                </TouchableOpacity>
+              </View>
+
+              {/* BÖLÜM 9 - TEHLİKELİ ALAN */}
+              <View style={{ backgroundColor: C.surface, padding: 20, alignItems: 'center' }}>
+                <TouchableOpacity onPress={deleteTask}>
+                  <Text style={{ fontSize: 16, fontWeight: '600', color: '#FF3B30' }}>Görevi Sil</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </SafeAreaView>
         </Modal>
 
         {/* AI Summary Modal */}
