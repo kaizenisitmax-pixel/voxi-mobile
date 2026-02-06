@@ -1,21 +1,21 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Modal,
-    SafeAreaView,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Switch,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  Linking,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Switch,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
+import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
 
 const C = {
@@ -24,637 +24,525 @@ const C = {
   text: '#1A1A1A',
   textSec: '#3C3C43',
   textTer: '#8E8E93',
-  accent: '#34C759',
   border: '#F2F2F7',
   danger: '#FF3B30',
+  switchOn: '#34C759',
   iconColor: '#3C3C43',
   avatarBg: '#E5E5EA',
   avatarText: '#3C3C43',
+  chevron: '#C7C7CC',
+  disabled: '#C7C7CC',
 };
 
-const STORAGE_KEY = 'kalfa_quick_messages';
-
-interface TeamMember {
-  id: string;
-  name: string;
-  role: 'admin' | 'manager' | 'member';
-}
-
 export default function SettingsScreen() {
-  const [quickMessages, setQuickMessages] = useState<string[]>([]);
-  const [newMsg, setNewMsg] = useState('');
-  const [showAdd, setShowAdd] = useState(false);
-  
-  const [showReport, setShowReport] = useState(false);
-  const [report, setReport] = useState<any>(null);
-  const [loadingReport, setLoadingReport] = useState(false);
-  
-  const [voiceEnabled, setVoiceEnabled] = useState(false);
-  
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
-  const currentUserRole = 'admin'; // Şimdilik Volkan admin
+  const router = useRouter();
+  const { user, signOut, profile, workspace } = useAuth();
 
-  useFocusEffect(
-    useCallback(() => {
-      loadMessages();
-      fetchTeamMembers();
-    }, [])
-  );
+  const [notifPrefs, setNotifPrefs] = useState({
+    push: true,
+    sms: false,
+    morning_reminder: true,
+    urgent_sms: true,
+  });
+  const [showSuggestions, setShowSuggestions] = useState(true);
+  const [memberCount, setMemberCount] = useState(0);
+  const [storageSize, setStorageSize] = useState('12.4 MB');
 
-  async function loadMessages() {
+  useEffect(() => {
+    if (!user) return;
+    fetchSettings();
+  }, [user]);
+
+  const fetchSettings = async () => {
     try {
-      const stored = await AsyncStorage.getItem(STORAGE_KEY);
-      if (stored) setQuickMessages(JSON.parse(stored));
-    } catch (e) {
-      console.error(e);
+      // Bildirim tercihleri
+      const { data: prof } = await supabase
+        .from('profiles')
+        .select('notification_prefs')
+        .eq('id', user?.id)
+        .single();
+
+      if (prof?.notification_prefs) {
+        setNotifPrefs({ ...notifPrefs, ...prof.notification_prefs });
+      }
+
+      // Üye sayısı
+      const { count } = await supabase
+        .from('workspace_members')
+        .select('id', { count: 'exact', head: true })
+        .eq('workspace_id', '9bf0a8cd-c704-4800-991a-cecb2453b42d')
+        .eq('is_active', true);
+      setMemberCount(count || 0);
+
+      // Öneri kartları ayarı
+      const saved = await AsyncStorage.getItem('voxi_show_suggestions');
+      if (saved !== null) setShowSuggestions(saved === 'true');
+    } catch (error) {
+      console.error('Settings fetch error:', error);
     }
-  }
+  };
 
-  async function saveMessages(msgs: string[]) {
-    try {
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(msgs));
-      setQuickMessages(msgs);
-    } catch (e) {
-      console.error(e);
-    }
-  }
+  const updateNotifPref = async (key: string, value: boolean) => {
+    const updated = { ...notifPrefs, [key]: value };
+    setNotifPrefs(updated);
+    await supabase
+      .from('profiles')
+      .update({ notification_prefs: updated })
+      .eq('id', user?.id);
+  };
 
-  function addMessage() {
-    if (!newMsg.trim()) return;
-    const updated = [...quickMessages, newMsg.trim()];
-    saveMessages(updated);
-    setNewMsg('');
-    setShowAdd(false);
-  }
+  const toggleSuggestions = async (value: boolean) => {
+    setShowSuggestions(value);
+    await AsyncStorage.setItem('voxi_show_suggestions', value.toString());
+  };
 
-  function deleteMessage(index: number) {
-    Alert.alert('Sil', `"${quickMessages[index]}" silinsin mi?`, [
+  const handleSignOut = () => {
+    Alert.alert(
+      'Çıkış Yap',
+      'Çıkış yapmak istediğinize emin misiniz?',
+      [
+        { text: 'İptal', style: 'cancel' },
+        {
+          text: 'Çıkış Yap',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await signOut();
+            } catch (error: any) {
+              Alert.alert('Hata', error.message || 'Çıkış yapılamadı');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleInvite = () => {
+    Alert.alert('Ekibe Davet Et', 'Davet özelliği team.tsx\'teki invite modal ile çalışacak şekilde bağlanacak.');
+  };
+
+  const handleClearChat = () => {
+    Alert.alert(
+      'Sohbet Geçmişini Temizle',
+      'VOXI ile olan tüm mesajlarınız silinecek. Bu işlem geri alınamaz.',
+      [
+        { text: 'İptal', style: 'cancel' },
+        {
+          text: 'Temizle',
+          style: 'destructive',
+          onPress: async () => {
+            await AsyncStorage.removeItem('voxi_messages');
+            Alert.alert('Temizlendi', 'Sohbet geçmişi silindi.');
+          },
+        },
+      ]
+    );
+  };
+
+  const handleClearCache = () => {
+    Alert.alert('Önbelleği Temizle', 'Önbellek verileri silinecek.', [
       { text: 'İptal', style: 'cancel' },
       {
-        text: 'Sil',
+        text: 'Temizle',
         style: 'destructive',
-        onPress: () => {
-          const updated = quickMessages.filter((_, i) => i !== index);
-          saveMessages(updated);
+        onPress: async () => {
+          Alert.alert('Temizlendi', 'Önbellek verileri silindi.');
         },
       },
     ]);
-  }
+  };
 
-  async function generateReport() {
-    setLoadingReport(true);
-    setShowReport(true);
-    
-    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    
-    const { data: completedTasks } = await supabase
-      .from('tasks')
-      .select('*')
-      .eq('status', 'done')
-      .gte('updated_at', weekAgo);
-      
-    const { data: activeTasks } = await supabase
-      .from('tasks')
-      .select('*')
-      .neq('status', 'done');
-      
-    const { data: messages } = await supabase
-      .from('messages')
-      .select('*')
-      .gte('created_at', weekAgo);
-    
-    setReport({
-      completed: completedTasks?.length || 0,
-      active: activeTasks?.length || 0,
-      messages: messages?.length || 0,
-      completedList: completedTasks || [],
-      urgentActive: activeTasks?.filter((t: any) => t.priority === 'urgent') || [],
-    });
-    setLoadingReport(false);
-  }
+  const handleExportData = () => {
+    Alert.alert('Yakında', 'Veri dışa aktarma özelliği yakında eklenecek.');
+  };
 
-  async function fetchTeamMembers() {
-    const { data } = await supabase
-      .from('team_members')
-      .select('*')
-      .order('name', { ascending: true });
-    
-    if (data) {
-      setTeamMembers(data);
+  const getInitials = (name?: string) => {
+    if (!name) return 'VX';
+    const parts = name.trim().split(' ');
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
     }
-  }
-
-  async function updateRole(memberId: string, newRole: 'admin' | 'manager' | 'member') {
-    await supabase
-      .from('team_members')
-      .update({ role: newRole })
-      .eq('id', memberId);
-    
-    fetchTeamMembers();
-  }
-
-  function changeRole(member: TeamMember) {
-    Alert.alert(
-      'Rol Değiştir',
-      `${member.name} için yeni rol seç`,
-      [
-        { text: 'Yönetici', onPress: () => updateRole(member.id, 'admin') },
-        { text: 'Müdür', onPress: () => updateRole(member.id, 'manager') },
-        { text: 'Üye', onPress: () => updateRole(member.id, 'member') },
-        { text: 'İptal', style: 'cancel' },
-      ]
-    );
-  }
-
-  function getRoleBadgeStyle(role: 'admin' | 'manager' | 'member') {
-    switch (role) {
-      case 'admin':
-        return { bg: '#1A1A1A', text: '#FFFFFF', label: 'Yönetici' };
-      case 'manager':
-        return { bg: '#F5F3EF', text: '#3C3C43', label: 'Müdür' };
-      case 'member':
-        return { bg: '#E5E5EA', text: '#8E8E93', label: 'Üye' };
-    }
-  }
+    return name.substring(0, 2).toUpperCase();
+  };
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
-
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Profile Card */}
-        <View style={{ alignItems: 'center', paddingVertical: 28, backgroundColor: '#FFFFFF', marginBottom: 35 }}>
-          <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: '#E5E5EA', alignItems: 'center', justifyContent: 'center' }}>
-            <Text style={{ fontSize: 26, fontWeight: '700', color: '#3C3C43' }}>V</Text>
-          </View>
-          <Text style={{ fontSize: 20, fontWeight: '600', color: '#1A1A1A', marginTop: 12 }}>Volkan</Text>
-          <Text style={{ fontSize: 13, color: '#8E8E93', marginTop: 2 }}>KALFA v0.2.0</Text>
+      <StatusBar barStyle="dark-content" />
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Ayarlar</Text>
         </View>
 
-        {/* Group 1 */}
-        <View style={{ backgroundColor: '#FFFFFF', marginBottom: 35 }}>
-          <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 20 }} activeOpacity={0.7}>
-            <Ionicons name="chatbubble-outline" size={22} color="#3C3C43" style={{ width: 32 }} />
-            <Text style={{ flex: 1, marginLeft: 8, fontSize: 17, color: '#1A1A1A' }}>Hazır Mesajlar</Text>
-            <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
-          </TouchableOpacity>
-
-          <View style={{ height: 0.5, backgroundColor: '#F2F2F7', marginLeft: 60 }} />
-
-          <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 20 }} activeOpacity={0.7} onPress={generateReport}>
-            <Ionicons name="bar-chart-outline" size={22} color="#3C3C43" style={{ width: 32 }} />
-            <Text style={{ flex: 1, marginLeft: 8, fontSize: 17, color: '#1A1A1A' }}>Haftalık Rapor</Text>
-            <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
-          </TouchableOpacity>
-
-          <View style={{ height: 0.5, backgroundColor: '#F2F2F7', marginLeft: 60 }} />
-
-          <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 20 }}>
-            <Ionicons name="mic-outline" size={22} color="#3C3C43" style={{ width: 32 }} />
-            <Text style={{ flex: 1, marginLeft: 8, fontSize: 17, color: '#1A1A1A' }}>Hey Voxi</Text>
-            <Switch
-              value={voiceEnabled}
-              onValueChange={setVoiceEnabled}
-              trackColor={{ false: '#E5E5EA', true: '#34C759' }}
-              thumbColor="#FFFFFF"
-            />
+        {/* Profil Kartı */}
+        <TouchableOpacity
+          onPress={() => router.push('/settings/profile')}
+          style={styles.profileCard}
+        >
+          <View style={styles.profileAvatar}>
+            <Text style={styles.profileAvatarText}>
+              {getInitials(profile?.full_name)}
+            </Text>
           </View>
-        </View>
-
-        {/* Group 2 */}
-        <View style={{ backgroundColor: '#FFFFFF', marginBottom: 35 }}>
-          <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 20 }} activeOpacity={0.7}>
-            <Ionicons name="people-outline" size={22} color="#3C3C43" style={{ width: 32 }} />
-            <Text style={{ flex: 1, marginLeft: 8, fontSize: 17, color: '#1A1A1A' }}>Ekip Yönetimi</Text>
-            <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
-          </TouchableOpacity>
-
-          <View style={{ height: 0.5, backgroundColor: '#F2F2F7', marginLeft: 60 }} />
-
-          <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 20 }} activeOpacity={0.7}>
-            <Ionicons name="notifications-outline" size={22} color="#3C3C43" style={{ width: 32 }} />
-            <Text style={{ flex: 1, marginLeft: 8, fontSize: 17, color: '#1A1A1A' }}>Bildirimler</Text>
-            <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Group 3 - Ekip Yönetimi (Admin Only) */}
-        {currentUserRole === 'admin' && teamMembers.length > 0 && (
-          <View style={{ backgroundColor: '#FFFFFF', marginBottom: 35 }}>
-            <View style={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 8 }}>
-              <Text style={{ fontSize: 12, fontWeight: '600', color: '#8E8E93', letterSpacing: 0.5 }}>
-                EKİP YÖNETİMİ
-              </Text>
-            </View>
-            
-            {teamMembers.map((member, index) => {
-              const badge = getRoleBadgeStyle(member.role);
-              return (
-                <View key={member.id}>
-                  {index > 0 && <View style={{ height: 0.5, backgroundColor: '#F2F2F7', marginLeft: 78 }} />}
-                  <TouchableOpacity
-                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 20 }}
-                    activeOpacity={0.7}
-                    onPress={() => changeRole(member)}
-                  >
-                    <View style={{
-                      width: 36,
-                      height: 36,
-                      borderRadius: 18,
-                      backgroundColor: '#E5E5EA',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      marginRight: 12,
-                    }}>
-                      <Text style={{ fontSize: 15, fontWeight: '600', color: '#3C3C43' }}>
-                        {member.name[0]}
-                      </Text>
-                    </View>
-                    
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 17, color: '#1A1A1A' }}>{member.name}</Text>
-                    </View>
-                    
-                    <View style={{
-                      backgroundColor: badge.bg,
-                      paddingHorizontal: 10,
-                      paddingVertical: 4,
-                      borderRadius: 6,
-                      marginRight: 8,
-                    }}>
-                      <Text style={{ fontSize: 11, fontWeight: '700', color: badge.text }}>
-                        {badge.label.toUpperCase()}
-                      </Text>
-                    </View>
-                    
-                    <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
-                  </TouchableOpacity>
-                </View>
-              );
-            })}
+          <View style={styles.profileInfo}>
+            <Text style={styles.profileName}>{profile?.full_name || 'Kullanıcı'}</Text>
+            <Text style={styles.profileEmail}>{user?.email || profile?.phone || ''}</Text>
           </View>
-        )}
+          <Ionicons name="chevron-forward" size={20} color={C.chevron} />
+        </TouchableOpacity>
 
-        {/* Group 4 */}
-        <View style={{ backgroundColor: '#FFFFFF', marginBottom: 35 }}>
-          <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 20 }} activeOpacity={0.7}>
-            <Ionicons name="information-circle-outline" size={22} color="#3C3C43" style={{ width: 32 }} />
-            <View style={{ flex: 1, marginLeft: 8 }}>
-              <Text style={{ fontSize: 17, color: '#1A1A1A' }}>Hakkında</Text>
-              <Text style={{ fontSize: 13, color: '#8E8E93', marginTop: 1 }}>KALFA v0.2.0</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
-          </TouchableOpacity>
-        </View>
+        {/* ŞİRKET */}
+        <SettingsGroup title="ŞİRKET">
+          <SettingsRow
+            icon="business-outline"
+            label={workspace?.name || 'Şirket Bilgileri'}
+            onPress={() => router.push('/settings/company')}
+          />
+          <SettingsRow
+            icon="people-outline"
+            label="Ekip Yönetimi"
+            subtitle={`${memberCount} üye`}
+            onPress={() => router.push('/settings/team-management')}
+          />
+          <SettingsRow
+            icon="link-outline"
+            label="Ekibe Davet Et"
+            onPress={handleInvite}
+          />
+        </SettingsGroup>
 
-        {/* Quick Messages Management */}
-        {showAdd && (
-          <View style={styles.settingsGroup}>
-            <View style={styles.addMessageSection}>
-              <Text style={styles.addMessageTitle}>Yeni Hazır Mesaj</Text>
-              <TextInput
-                style={styles.addInput}
-                value={newMsg}
-                onChangeText={setNewMsg}
-                placeholder="Mesaj yaz..."
-                placeholderTextColor={C.textTer}
-                autoFocus
-                multiline
-              />
-              <View style={styles.addButtonRow}>
-                <TouchableOpacity
-                  style={[styles.addButton, styles.cancelButton]}
-                  onPress={() => {
-                    setShowAdd(false);
-                    setNewMsg('');
-                  }}
-                >
-                  <Text style={styles.cancelButtonText}>İptal</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.addButton, styles.saveButton]} onPress={addMessage}>
-                  <Text style={styles.saveButtonText}>Kaydet</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        )}
+        {/* VOXI */}
+        <SettingsGroup title="VOXI">
+          <SettingsRow
+            icon="sparkles-outline"
+            label="AI Model"
+            value="Sonnet 4.5"
+          />
+          <SettingsRow
+            icon="trash-outline"
+            label="Sohbet Geçmişini Temizle"
+            onPress={handleClearChat}
+          />
+          <SettingsRow
+            icon="bulb-outline"
+            label="Öneri Kartları"
+            switchValue={showSuggestions}
+            onSwitchChange={toggleSuggestions}
+          />
+        </SettingsGroup>
 
-        {quickMessages.length > 0 && (
-          <View style={styles.settingsGroup}>
-            <View style={styles.messagesHeader}>
-              <Text style={styles.messagesTitle}>Kayıtlı Mesajlar</Text>
-              <TouchableOpacity onPress={() => setShowAdd(!showAdd)}>
-                <Text style={styles.addLink}>+ Ekle</Text>
-              </TouchableOpacity>
-            </View>
-            {quickMessages.map((msg, i) => (
-              <View key={i}>
-                {i > 0 && <View style={[styles.settingsSep, { marginLeft: 16 }]} />}
-                <TouchableOpacity
-                  style={styles.messageRow}
-                  onLongPress={() => deleteMessage(i)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.messageText} numberOfLines={2}>
-                    {msg}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            ))}
-            <View style={styles.messageHint}>
-              <Text style={styles.messageHintText}>Silmek için basılı tut</Text>
-            </View>
-          </View>
-        )}
+        {/* BİLDİRİMLER */}
+        <SettingsGroup title="BİLDİRİMLER">
+          <SettingsRow
+            icon="notifications-outline"
+            label="Push Bildirimleri"
+            switchValue={notifPrefs.push}
+            onSwitchChange={(val) => updateNotifPref('push', val)}
+          />
+          <SettingsRow
+            icon="chatbubble-outline"
+            label="SMS Bildirimleri"
+            subtitle="Sadece acil görevler"
+            switchValue={notifPrefs.sms}
+            onSwitchChange={(val) => updateNotifPref('sms', val)}
+          />
+          <SettingsRow
+            icon="sunny-outline"
+            label="Sabah Hatırlatması"
+            subtitle="Her gün 09:00'da görev özeti"
+            switchValue={notifPrefs.morning_reminder}
+            onSwitchChange={(val) => updateNotifPref('morning_reminder', val)}
+          />
+          <SettingsRow
+            icon="alert-circle-outline"
+            label="Acil Görev SMS"
+            subtitle="Acil görev atandığında SMS gönder"
+            switchValue={notifPrefs.urgent_sms}
+            onSwitchChange={(val) => updateNotifPref('urgent_sms', val)}
+          />
+        </SettingsGroup>
 
-        {quickMessages.length === 0 && !showAdd && (
-          <View style={styles.settingsGroup}>
-            <View style={styles.emptyMessages}>
-              <Text style={styles.emptyMessagesText}>Hazır mesaj yok</Text>
-              <TouchableOpacity style={styles.emptyAddButton} onPress={() => setShowAdd(true)}>
-                <Text style={styles.emptyAddButtonText}>+ İlk mesajı ekle</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
+        {/* GÖRÜNÜM */}
+        <SettingsGroup title="GÖRÜNÜM">
+          <SettingsRow
+            icon="language-outline"
+            label="Dil"
+            value="Türkçe"
+            onPress={() => Alert.alert('Yakında', 'Çoklu dil desteği yakında eklenecek.')}
+          />
+          <SettingsRow
+            icon="contrast-outline"
+            label="Tema"
+            value="Açık"
+            onPress={() => Alert.alert('Yakında', 'Karanlık tema yakında eklenecek.')}
+          />
+        </SettingsGroup>
 
-        {/* Spacer */}
-        <View style={{ height: 40 }} />
+        {/* VERİ YÖNETİMİ */}
+        <SettingsGroup title="VERİ YÖNETİMİ">
+          <SettingsRow
+            icon="server-outline"
+            label="Depolama Alanı"
+            value={storageSize}
+          />
+          <SettingsRow
+            icon="refresh-outline"
+            label="Önbelleği Temizle"
+            onPress={handleClearCache}
+          />
+          <SettingsRow
+            icon="download-outline"
+            label="Verilerimi Dışa Aktar"
+            onPress={handleExportData}
+          />
+        </SettingsGroup>
+
+        {/* HAKKINDA */}
+        <SettingsGroup title="HAKKINDA">
+          <SettingsRow
+            icon="information-circle-outline"
+            label="Versiyon"
+            value="1.0.0 (1)"
+          />
+          <SettingsRow
+            icon="shield-checkmark-outline"
+            label="Gizlilik Politikası"
+            onPress={() => router.push('/legal/privacy')}
+          />
+          <SettingsRow
+            icon="document-text-outline"
+            label="Kullanım Koşulları"
+            onPress={() => router.push('/legal/terms')}
+          />
+          <SettingsRow
+            icon="help-circle-outline"
+            label="Destek"
+            onPress={() => Linking.openURL('mailto:destek@voxi.app')}
+          />
+          <SettingsRow
+            icon="star-outline"
+            label="Bizi Değerlendirin"
+            onPress={() => {
+              Alert.alert('Teşekkürler!', 'Uygulama yayınlandığında değerlendirme yapabileceksiniz.');
+            }}
+          />
+        </SettingsGroup>
+
+        {/* Çıkış Yap */}
+        <TouchableOpacity onPress={handleSignOut} style={styles.signOutButton}>
+          <Text style={styles.signOutText}>Çıkış Yap</Text>
+        </TouchableOpacity>
+
+        {/* Footer */}
+        <Text style={styles.footerText}>VOXI v1.0.0 · Powered by Anthropic AI</Text>
       </ScrollView>
-
-      {/* Haftalık Rapor Modal */}
-      <Modal visible={showReport} transparent animationType="slide" onRequestClose={() => setShowReport(false)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-end' }}>
-          <View style={{
-            backgroundColor: '#FFFFFF',
-            borderTopLeftRadius: 16,
-            borderTopRightRadius: 16,
-            maxHeight: '80%',
-            paddingBottom: 40,
-          }}>
-            <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: '#D1D5DB', alignSelf: 'center', marginTop: 8, marginBottom: 16 }} />
-            
-            <ScrollView style={{ paddingHorizontal: 20 }}>
-              <Text style={{ fontSize: 22, fontWeight: '700', color: '#212121', marginBottom: 4 }}>Haftalık Rapor</Text>
-              <Text style={{ fontSize: 13, color: '#8E8E93', marginBottom: 20 }}>Son 7 gün</Text>
-              
-              {loadingReport ? (
-                <ActivityIndicator color="#1A1A1A" size="large" style={{ marginTop: 40 }} />
-              ) : report && (
-                <>
-                  {/* Özet kartları */}
-                  <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
-                    <View style={{ flex: 1, backgroundColor: '#F5F3EF', borderRadius: 12, padding: 16, alignItems: 'center' }}>
-                      <Text style={{ fontSize: 28, fontWeight: '700', color: '#1A1A1A' }}>{report.completed}</Text>
-                      <Text style={{ fontSize: 12, color: '#8E8E93', marginTop: 4 }}>Tamamlanan</Text>
-                    </View>
-                    <View style={{ flex: 1, backgroundColor: '#F5F3EF', borderRadius: 12, padding: 16, alignItems: 'center' }}>
-                      <Text style={{ fontSize: 28, fontWeight: '700', color: '#1A1A1A' }}>{report.active}</Text>
-                      <Text style={{ fontSize: 12, color: '#8E8E93', marginTop: 4 }}>Devam Eden</Text>
-                    </View>
-                    <View style={{ flex: 1, backgroundColor: '#F5F3EF', borderRadius: 12, padding: 16, alignItems: 'center' }}>
-                      <Text style={{ fontSize: 28, fontWeight: '700', color: '#1A1A1A' }}>{report.messages}</Text>
-                      <Text style={{ fontSize: 12, color: '#8E8E93', marginTop: 4 }}>Mesaj</Text>
-                    </View>
-                  </View>
-                  
-                  {/* Acil görevler */}
-                  {report.urgentActive.length > 0 && (
-                    <>
-                      <Text style={{ fontSize: 16, fontWeight: '600', color: '#212121', marginBottom: 10 }}>
-                        Acil Görevler ({report.urgentActive.length})
-                      </Text>
-                      {report.urgentActive.map((t: any) => (
-                        <View key={t.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, gap: 10 }}>
-                          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#FF3B30' }} />
-                          <Text style={{ fontSize: 14, color: '#212121', flex: 1 }}>{t.title}</Text>
-                          <Text style={{ fontSize: 12, color: '#8E8E93' }}>{t.assigned_to}</Text>
-                        </View>
-                      ))}
-                    </>
-                  )}
-                  
-                  {/* Tamamlanan görevler */}
-                  {report.completedList.length > 0 && (
-                    <>
-                      <Text style={{ fontSize: 16, fontWeight: '600', color: '#212121', marginTop: 16, marginBottom: 10 }}>
-                        Tamamlanan ({report.completedList.length})
-                      </Text>
-                      {report.completedList.map((t: any) => (
-                        <View key={t.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, gap: 10 }}>
-                          <Ionicons name="checkmark-circle" size={18} color="#8E8E93" />
-                          <Text style={{ fontSize: 14, color: '#8E8E93', flex: 1 }}>{t.title}</Text>
-                        </View>
-                      ))}
-                    </>
-                  )}
-                </>
-              )}
-            </ScrollView>
-            
-            <TouchableOpacity
-              onPress={() => setShowReport(false)}
-              style={{ marginHorizontal: 20, marginTop: 16, backgroundColor: '#F5F3EF', borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
-            >
-              <Text style={{ fontSize: 15, fontWeight: '600', color: '#1A1A1A' }}>Kapat</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
+
+// YARDIMCI KOMPONENTLER
+
+interface SettingsGroupProps {
+  title?: string;
+  children: React.ReactNode;
+}
+
+const SettingsGroup = ({ title, children }: SettingsGroupProps) => (
+  <View style={styles.group}>
+    {title && <Text style={styles.groupTitle}>{title}</Text>}
+    <View style={styles.groupContent}>
+      {React.Children.map(children, (child, index) => (
+        <>
+          {child}
+          {index < React.Children.count(children) - 1 && <View style={styles.separator} />}
+        </>
+      ))}
+    </View>
+  </View>
+);
+
+interface SettingsRowProps {
+  icon?: string;
+  label: string;
+  subtitle?: string;
+  value?: string;
+  onPress?: () => void;
+  switchValue?: boolean;
+  onSwitchChange?: (value: boolean) => void;
+  danger?: boolean;
+}
+
+const SettingsRow = ({
+  icon,
+  label,
+  subtitle,
+  value,
+  onPress,
+  switchValue,
+  onSwitchChange,
+  danger,
+}: SettingsRowProps) => {
+  const content = (
+    <View style={styles.row}>
+      {icon && (
+        <Ionicons
+          name={icon as any}
+          size={22}
+          color={danger ? C.danger : C.iconColor}
+          style={styles.rowIcon}
+        />
+      )}
+      <View style={styles.rowContent}>
+        <Text style={[styles.rowLabel, danger && { color: C.danger }]}>{label}</Text>
+        {subtitle && <Text style={styles.rowSubtitle}>{subtitle}</Text>}
+      </View>
+      {value && <Text style={styles.rowValue}>{value}</Text>}
+      {onSwitchChange !== undefined && (
+        <Switch
+          value={switchValue}
+          onValueChange={onSwitchChange}
+          trackColor={{ false: '#E5E5EA', true: C.switchOn }}
+          thumbColor="#FFFFFF"
+        />
+      )}
+      {onPress && !onSwitchChange && (
+        <Ionicons name="chevron-forward" size={18} color={C.chevron} />
+      )}
+    </View>
+  );
+
+  if (onPress) {
+    return <TouchableOpacity onPress={onPress}>{content}</TouchableOpacity>;
+  }
+  return content;
+};
+
+// STYLES
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: C.bg,
   },
-  content: {
-    flex: 1,
+  scrollContent: {
+    paddingBottom: 40,
   },
-
-  // Profile Card
-  profileCard: {
-    backgroundColor: C.surface,
-    borderRadius: 16,
-    padding: 24,
-    marginHorizontal: 20,
-    marginTop: 16,
-    alignItems: 'center',
+  header: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 8,
   },
-  profileAvatar: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: C.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  profileAvatarText: {
-    color: C.surface,
-    fontSize: 28,
-    fontWeight: '700',
-  },
-  profileName: {
-    fontSize: 22,
+  headerTitle: {
+    fontSize: 34,
     fontWeight: '700',
     color: C.text,
-    marginBottom: 4,
-  },
-  profileEmail: {
-    fontSize: 14,
-    color: C.textSec,
   },
 
-  // Settings Groups
-  settingsGroup: {
+  // Profil kartı
+  profileCard: {
     backgroundColor: C.surface,
-    borderRadius: 12,
-    marginHorizontal: 20,
-    marginTop: 16,
-    overflow: 'hidden',
-  },
-  settingsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    padding: 16,
+    marginTop: 8,
   },
-  settingsIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 6,
+  profileAvatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: C.avatarBg,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 14,
   },
-  settingsLabelContainer: {
+  profileAvatarText: {
+    fontSize: 22,
+    fontWeight: '600',
+    color: C.avatarText,
+  },
+  profileInfo: {
     flex: 1,
   },
-  settingsLabel: {
-    flex: 1,
-    fontSize: 16,
+  profileName: {
+    fontSize: 20,
+    fontWeight: '600',
     color: C.text,
   },
-  settingsSubLabel: {
-    fontSize: 13,
-    color: C.textSec,
+  profileEmail: {
+    fontSize: 14,
+    color: C.textTer,
     marginTop: 2,
   },
-  settingsSep: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.border,
-  },
 
-  // Add Message Section
-  addMessageSection: {
-    padding: 16,
+  // Gruplar
+  group: {
+    marginTop: 0,
   },
-  addMessageTitle: {
-    fontSize: 16,
+  groupTitle: {
+    fontSize: 13,
     fontWeight: '600',
-    color: C.text,
-    marginBottom: 12,
-  },
-  addInput: {
-    backgroundColor: C.bg,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 15,
-    color: C.text,
-    minHeight: 80,
-    textAlignVertical: 'top',
-  },
-  addButtonRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 12,
-  },
-  addButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  cancelButton: {
-    backgroundColor: C.bg,
-  },
-  cancelButtonText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: C.textSec,
-  },
-  saveButton: {
-    backgroundColor: C.accent,
-  },
-  saveButtonText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: C.surface,
-  },
-
-  // Messages List
-  messagesHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 8,
-  },
-  messagesTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: C.textSec,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  addLink: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: C.accent,
-  },
-  messageRow: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  messageText: {
-    fontSize: 15,
-    color: C.text,
-    lineHeight: 20,
-  },
-  messageHint: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  messageHintText: {
-    fontSize: 11,
     color: C.textTer,
-    textAlign: 'center',
+    paddingLeft: 16,
+    marginTop: 28,
+    marginBottom: 8,
+    textTransform: 'uppercase',
+  },
+  groupContent: {
+    backgroundColor: C.surface,
   },
 
-  // Empty State
-  emptyMessages: {
-    padding: 32,
+  // Satırlar
+  row: {
+    flexDirection: 'row',
     alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minHeight: 44,
   },
-  emptyMessagesText: {
-    fontSize: 15,
-    color: C.textSec,
-    marginBottom: 12,
+  rowIcon: {
+    marginRight: 14,
+    width: 24,
   },
-  emptyAddButton: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: C.accent,
+  rowContent: {
+    flex: 1,
   },
-  emptyAddButtonText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: C.surface,
+  rowLabel: {
+    fontSize: 17,
+    color: C.text,
+  },
+  rowSubtitle: {
+    fontSize: 13,
+    color: C.textTer,
+    marginTop: 1,
+  },
+  rowValue: {
+    fontSize: 17,
+    color: C.textTer,
+    marginRight: 6,
+  },
+  separator: {
+    height: 0.5,
+    backgroundColor: C.border,
+    marginLeft: 52,
+  },
+
+  // Çıkış + Footer
+  signOutButton: {
+    backgroundColor: C.surface,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 28,
+  },
+  signOutText: {
+    fontSize: 17,
+    color: C.danger,
+    fontWeight: '500',
+  },
+  footerText: {
+    fontSize: 12,
+    color: C.disabled,
+    textAlign: 'center',
+    marginTop: 24,
+    marginBottom: 40,
   },
 });

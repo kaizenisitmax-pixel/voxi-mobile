@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VOXI — AI Destekli Ekip Yönetimi</title>
+  <meta name="description" content="VOXI, küçük ekipler için AI destekli görev ve müşteri yönetimi uygulaması. Sesli komutlarla görev oluştur, ekibini yönet.">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="VOXI — AI Destekli Ekip Yönetimi">
+  <meta property="og:description" content="Küçük ekipler için AI destekli görev ve müşteri yönetimi.">
+  <meta property="og:image" content="https://voxi.app/og-image.png">
+  <meta property="og:url" content="https://voxi.app">
+  <meta property="og:type" content="website">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="/favicon.png">
+
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
+      background: #F5F3EF;
+      color: #1A1A1A;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Hero */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 40px 20px;
+    }
+
+    .logo {
+      font-size: 64px;
+      font-weight: 800;
+      letter-spacing: -2px;
+      margin-bottom: 16px;
+    }
+
+    .tagline {
+      font-size: 22px;
+      color: #3C3C43;
+      max-width: 500px;
+      line-height: 1.4;
+      margin-bottom: 12px;
+    }
+
+    .subtitle {
+      font-size: 16px;
+      color: #8E8E93;
+      max-width: 440px;
+      line-height: 1.5;
+      margin-bottom: 40px;
+    }
+
+    /* Store butonları */
+    .store-buttons {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-bottom: 48px;
+    }
+
+    .store-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 28px;
+      background: #1A1A1A;
+      color: #FFFFFF;
+      border-radius: 12px;
+      text-decoration: none;
+      font-size: 16px;
+      font-weight: 600;
+      transition: transform 0.2s, opacity 0.2s;
+    }
+
+    .store-btn:hover {
+      transform: translateY(-2px);
+      opacity: 0.9;
+    }
+
+    .store-btn svg {
+      width: 24px;
+      height: 24px;
+      fill: #FFFFFF;
+    }
+
+    /* Özellikler */
+    .features {
+      padding: 80px 20px;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    .features h2 {
+      font-size: 36px;
+      font-weight: 700;
+      text-align: center;
+      margin-bottom: 48px;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 24px;
+    }
+
+    .feature-card {
+      background: #FFFFFF;
+      border-radius: 16px;
+      padding: 28px 24px;
+      border: 1px solid #F0EDE8;
+    }
+
+    .feature-card h3 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .feature-icon {
+      font-size: 32px;
+      margin-bottom: 12px;
+    }
+
+    .feature-card p {
+      font-size: 15px;
+      color: #3C3C43;
+      line-height: 1.5;
+    }
+
+    /* CTA */
+    .cta {
+      text-align: center;
+      padding: 80px 20px;
+      background: #1A1A1A;
+      color: #FFFFFF;
+    }
+
+    .cta h2 {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .cta p {
+      font-size: 16px;
+      color: #8E8E93;
+      margin-bottom: 32px;
+    }
+
+    .cta .store-btn {
+      background: #FFFFFF;
+      color: #1A1A1A;
+    }
+
+    .cta .store-btn svg { fill: #1A1A1A; }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      padding: 32px 20px;
+      font-size: 13px;
+      color: #8E8E93;
+    }
+
+    footer a {
+      color: #3C3C43;
+      text-decoration: none;
+    }
+
+    footer a:hover { text-decoration: underline; }
+
+    /* Mobil */
+    @media (max-width: 600px) {
+      .logo { font-size: 48px; }
+      .tagline { font-size: 18px; }
+      .features h2 { font-size: 28px; }
+      .cta h2 { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="logo">VOXI</div>
+    <p class="tagline">AI destekli ekip yönetimi.<br>Konuş, yönet, büyüt.</p>
+    <p class="subtitle">Küçük ekipler için tasarlandı. VOXI ile sesli komutlarla görev oluştur, müşteri takibi yap, ekibini tek noktadan yönet.</p>
+    <div class="store-buttons">
+      <a href="#" class="store-btn">
+        <svg viewBox="0 0 24 24"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+        App Store
+      </a>
+      <a href="#" class="store-btn">
+        <svg viewBox="0 0 24 24"><path d="M3.18 23.69c.53.32 1.19.35 1.75.08L22.36 12.5c.56-.27.92-.84.92-1.46s-.36-1.19-.92-1.46L4.93.31c-.56-.27-1.22-.24-1.75.08S2.25 1.12 2.25 1.73v20.54c0 .61.4 1.1.93 1.42zM3.75 2.04L14.45 11l-10.7 9V2.04z"/></svg>
+        Google Play
+      </a>
+    </div>
+  </section>
+
+  <!-- ÖZELLİKLER -->
+  <section class="features">
+    <h2>Neden VOXI?</h2>
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-icon">🤖</div>
+        <h3>AI Asistan</h3>
+        <p>VOXI'ye konuş, o anlasın. "Mehmet'e montaj görevi ata" de, gerisini VOXI halleder.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📋</div>
+        <h3>Görev Yönetimi</h3>
+        <p>Görev oluştur, ata, takip et. 5N1K detayları ile her görev tam tanımlı.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">👥</div>
+        <h3>Müşteri Kartları</h3>
+        <p>Müşteri ve paydaş bilgilerini tek yerde tut. Görevlerle otomatik bağla.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔔</div>
+        <h3>Akıllı Bildirimler</h3>
+        <p>Görev atandığında push, acil durumda SMS. Sabah özeti ile güne hazır başla.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📊</div>
+        <h3>Haftalık Rapor</h3>
+        <p>VOXI'den "haftalık özet" iste. Tamamlanan, geciken, acil görevleri anında gör.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🏢</div>
+        <h3>Çoklu Ekip</h3>
+        <p>Montaj, satış, depo — her ekip kendi görevlerini görsün. Ortak müşteri kartları.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta">
+    <h2>Ekibini VOXI ile yönet</h2>
+    <p>Ücretsiz başla. 3 kişiye kadar ücretsiz, kredi kartı gerekmez.</p>
+    <div class="store-buttons">
+      <a href="#" class="store-btn">Hemen İndir</a>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <p>
+      © 2026 VOXI · 
+      <a href="/privacy">Gizlilik Politikası</a> · 
+      <a href="/terms">Kullanım Koşulları</a> · 
+      <a href="mailto:destek@voxi.app">Destek</a>
+    </p>
+  </footer>
+
+</body>
+</html>
