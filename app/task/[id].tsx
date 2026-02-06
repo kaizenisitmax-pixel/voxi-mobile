@@ -25,6 +25,7 @@ import {
 } from 'react-native';
 import { detectReminder, summarizeTask } from '../../lib/ai';
 import { supabase } from '../../lib/supabase';
+import { triggerTaskCompletedPush } from '../../lib/push-trigger';
 
 const C = {
   bg: '#F5F3EF',
@@ -276,9 +277,35 @@ export default function TaskDetail() {
     try {
       await Audio.requestPermissionsAsync();
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording: rec } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
+      
+      const recordingOptions = {
+        isMeteringEnabled: true,
+        android: {
+          extension: '.wav',
+          outputFormat: Audio.AndroidOutputFormat.DEFAULT,
+          audioEncoder: Audio.AndroidAudioEncoder.DEFAULT,
+          sampleRate: 16000,
+          numberOfChannels: 1,
+          bitRate: 128000,
+        },
+        ios: {
+          extension: '.wav',
+          outputFormat: Audio.IOSOutputFormat.LINEARPCM,
+          audioQuality: Audio.IOSAudioQuality.HIGH,
+          sampleRate: 16000,
+          numberOfChannels: 1,
+          bitRate: 128000,
+          linearPCMBitDepth: 16,
+          linearPCMIsBigEndian: false,
+          linearPCMIsFloat: false,
+        },
+        web: {
+          mimeType: 'audio/wav',
+          bitsPerSecond: 128000,
+        },
+      };
+      
+      const { recording: rec } = await Audio.Recording.createAsync(recordingOptions);
       setRecording(rec);
       setIsRecording(true);
       setRecordingDuration(0);
@@ -327,6 +354,17 @@ export default function TaskDetail() {
 
   async function updateTaskStatus(newStatus: 'open' | 'in_progress' | 'done') {
     await supabase.from('tasks').update({ status: newStatus }).eq('id', id);
+    
+    // Tamamlandıysa push bildirim gönder
+    if (newStatus === 'done' && task) {
+      triggerTaskCompletedPush({
+        id: task.id,
+        title: task.title,
+        completed_by: 'Volkan',
+        created_by: task.created_by,
+      });
+    }
+    
     fetchTask();
   }
 
@@ -896,7 +934,7 @@ export default function TaskDetail() {
               borderBottomColor: C.border,
             }}>
               <TouchableOpacity onPress={() => setShowOptionsMenu(false)}>
-                <Text style={{ fontSize: 16, color: '#007AFF' }}>Kapat</Text>
+                <Text style={{ fontSize: 16, color: '#1A1A1A' }}>Kapat</Text>
               </TouchableOpacity>
               <Text style={{ fontSize: 17, fontWeight: '600', color: C.text }}>Görev Kartı</Text>
               <View style={{ width: 50 }} />
@@ -982,12 +1020,21 @@ export default function TaskDetail() {
                 </TouchableOpacity>
                 <View style={{ height: 0.5, backgroundColor: C.border }} />
 
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 12 }}>
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 12 }}
+                  onPress={() => {
+                    if (task?.customer_id) {
+                      router.push(`/customer/${task.customer_id}`);
+                    } else {
+                      Alert.alert('Müşteri Bağla', 'Bu özellik yakında eklenecek.');
+                    }
+                  }}
+                >
                   <Text style={{ fontSize: 15, color: C.textSec, width: 100 }}>👤 KİM:</Text>
-                  <Text style={{ fontSize: 15, color: C.text, flex: 1 }}>
-                    {task?.customer_id ? 'Müşteri bağlı' : 'Müşteri bağla'}
+                  <Text style={{ fontSize: 15, color: task?.customer_id ? C.text : C.textTer, flex: 1 }}>
+                    {task?.customer_id ? 'Müşteri bağlı →' : 'Müşteri bağla'}
                   </Text>
-                </View>
+                </TouchableOpacity>
               </View>
 
               {/* BÖLÜM 3 - ATAMA */}
@@ -1058,7 +1105,7 @@ export default function TaskDetail() {
                       borderRadius: 10,
                       padding: 16,
                       alignItems: 'center',
-                      backgroundColor: '#FAFAFA',
+                      backgroundColor: '#F5F3EF',
                     }}
                     onPress={() => {
                       Alert.alert('Müşteri Ekle', 'Bu özellik yakında eklenecek.');
@@ -1109,7 +1156,7 @@ export default function TaskDetail() {
                       borderRadius: 8,
                       alignItems: 'center',
                       justifyContent: 'center',
-                      backgroundColor: '#FAFAFA',
+                      backgroundColor: '#F5F3EF',
                     }}
                     onPress={addImageFile}
                   >
@@ -1125,7 +1172,7 @@ export default function TaskDetail() {
                       borderRadius: 8,
                       alignItems: 'center',
                       justifyContent: 'center',
-                      backgroundColor: '#FAFAFA',
+                      backgroundColor: '#F5F3EF',
                     }}
                     onPress={addDocumentFile}
                   >
@@ -1141,7 +1188,7 @@ export default function TaskDetail() {
                       borderRadius: 8,
                       alignItems: 'center',
                       justifyContent: 'center',
-                      backgroundColor: '#FAFAFA',
+                      backgroundColor: '#F5F3EF',
                     }}
                     onPress={() => Alert.alert('Ses', 'Bu özellik yakında eklenecek.')}
                   >
@@ -1178,10 +1225,10 @@ export default function TaskDetail() {
                     generateSummary();
                   }}
                 >
-                  <Ionicons name="sparkles-outline" size={20} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
+                  <Ionicons name="sparkles-outline" size={22} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
                   <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 16, color: C.text }}>AI Özet</Text>
-                    <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>Konuşmanın özetini oluştur</Text>
+                    <Text style={{ fontSize: 15, fontWeight: '500', color: C.text }}>AI Özet</Text>
+                    <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>VOXI ile özetle</Text>
                   </View>
                   <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
                 </TouchableOpacity>
@@ -1194,10 +1241,10 @@ export default function TaskDetail() {
                     setShowOptionsMenu(false);
                   }}
                 >
-                  <Ionicons name="star-outline" size={20} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
+                  <Ionicons name="star-outline" size={22} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
                   <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 16, color: C.text }}>Yıldızlı Mesajlar</Text>
-                    <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>Önemli mesajları göster</Text>
+                    <Text style={{ fontSize: 15, fontWeight: '500', color: C.text }}>Yıldızlı</Text>
+                    <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>Önemli görevler</Text>
                   </View>
                   <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
                 </TouchableOpacity>
@@ -1210,10 +1257,10 @@ export default function TaskDetail() {
                     setShowMediaGallery(true);
                   }}
                 >
-                  <Ionicons name="images-outline" size={20} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
+                  <Ionicons name="images-outline" size={22} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
                   <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 16, color: C.text }}>Medya Galerisi</Text>
-                    <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>Tüm fotoğrafları görüntüle</Text>
+                    <Text style={{ fontSize: 15, fontWeight: '500', color: C.text }}>Medya Galerisi</Text>
+                    <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>Tüm dosya ve fotoğraflar</Text>
                   </View>
                   <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
                 </TouchableOpacity>
@@ -1223,10 +1270,10 @@ export default function TaskDetail() {
                   style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14 }}
                   onPress={() => Alert.alert('Hatırlatma', 'Bu özellik yakında eklenecek.')}
                 >
-                  <Ionicons name="notifications-outline" size={20} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
+                  <Ionicons name="alarm-outline" size={22} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
                   <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 16, color: C.text }}>Hatırlatma Kur</Text>
-                    <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>Bu görev için hatırlatıcı ayarla</Text>
+                    <Text style={{ fontSize: 15, fontWeight: '500', color: C.text }}>Hatırlatma Kur</Text>
+                    <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>Bildirim ayarla</Text>
                   </View>
                   <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
                 </TouchableOpacity>

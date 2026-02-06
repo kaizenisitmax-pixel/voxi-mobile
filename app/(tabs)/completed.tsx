@@ -53,6 +53,7 @@ export default function CompletedScreen() {
     const { data, error } = await supabase
       .from('tasks')
       .select('*')
+      .eq('team_id', 'e843b87c-b3e9-4740-8f63-fde6bdaf9640')
       .eq('status', 'done')
       .order('created_at', { ascending: false });
 
