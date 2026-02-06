@@ -312,7 +312,12 @@ export default function TasksScreen() {
           <View key={date} style={styles.dateGroup}>
             <Text style={styles.dateTitle}>{date}</Text>
             {dateTasks.map((task) => {
-              const initials = task.assigned_to?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || '??';
+              const initials = (task.assigned_to || '')
+                .split(' ')
+                .map(n => n[0])
+                .join('')
+                .toUpperCase()
+                .slice(0, 2) || '??';
               
               return (
                 <TouchableOpacity

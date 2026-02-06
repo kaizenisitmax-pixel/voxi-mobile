@@ -139,31 +139,57 @@ export default function HomeScreen() {
       const uri = recordingRef.current.getURI();
       recordingRef.current = null;
 
-      if (uri) {
-        setStatusText('Sesinizi anlıyorum...');
-        const transcript = await transcribeAudio(uri);
-        
-        if (transcript) {
-          setStatusText('Yapılıyor...');
-          const result = await processVoxiChat(transcript);
-          
-          if (result) {
-            setStatusText(result.message.length > 80 
-              ? result.message.slice(0, 80) + '...' 
-              : result.message);
-            setTimeout(() => setStatusText("VOXI'ye bir şey söyle"), 5000);
-          }
-        } else {
-          setStatusText('Anlayamadım, tekrar dener misiniz?');
-          setTimeout(() => setStatusText("VOXI'ye bir şey söyle"), 3000);
-        }
+      if (!uri) {
+        setStatusText('Ses kaydedilemedi');
+        setIsProcessing(false);
+        return;
+      }
+
+      // Timeout ile transcribe (30 saniye)
+      setStatusText('Sesinizi anlıyorum...');
+      const timeoutPromise = new Promise<null>((_, reject) =>
+        setTimeout(() => reject(new Error('Timeout')), 30000)
+      );
+
+      let transcript: string | null = null;
+      try {
+        transcript = (await Promise.race([
+          transcribeAudio(uri),
+          timeoutPromise,
+        ])) as string | null;
+      } catch (err) {
+        console.error('Transcribe failed:', err);
+        setStatusText('Ses tanınamadı, tekrar deneyin');
+        setIsProcessing(false);
+        return;
+      }
+
+      if (!transcript) {
+        setStatusText('Ses tanınamadı, tekrar deneyin');
+        setIsProcessing(false);
+        return;
+      }
+
+      // AI işleme
+      setStatusText('Yapılıyor...');
+      const result = await processVoxiChat(transcript);
+
+      if (result) {
+        setStatusText(
+          result.message.length > 80
+            ? result.message.slice(0, 80) + '...'
+            : result.message
+        );
+      } else {
+        setStatusText('Komut anlaşılamadı');
       }
     } catch (err) {
-      console.error('İşleme hatası:', err);
+      console.error('stopRecording error:', err);
       setStatusText('Bir hata oluştu');
-      setTimeout(() => setStatusText("VOXI'ye bir şey söyle"), 3000);
     } finally {
       setIsProcessing(false);
+      // 6 saniye sonra status'u sıfırla
+      setTimeout(() => setStatusText("VOXI'ye bir şey söyle"), 6000);
     }
   };
 
