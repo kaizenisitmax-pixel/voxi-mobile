@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   TextInput, Alert, ActivityIndicator,
@@ -7,10 +7,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import { Audio } from 'expo-av';
 import { supabase } from '../../lib/supabase';
 import { getWorkspaceInfo } from '../../lib/workspace';
-import { processVoxiChat } from '../../lib/ai';
+import { processVoxiChat, processVision } from '../../lib/ai';
+import { startRecording, stopRecording, transcribeAudio } from '../../utils/recording';
+import { speakText } from '../../utils/audio';
 
 interface CustomerForm {
   company_name: string;
@@ -26,33 +29,157 @@ interface CustomerForm {
 export default function NewCustomerScreen() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
-  const [activeMethod, setActiveMethod] = useState<'photo' | 'voice' | 'manual' | null>(null);
+  const [activeMethod, setActiveMethod] = useState<'photo' | 'voice' | 'manual' | 'document' | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [statusText, setStatusText] = useState('');
+  const recordingRef = useRef<Audio.Recording | null>(null);
   const [form, setForm] = useState<CustomerForm>({
     company_name: '', contact_person: '', phone: '', email: '',
     address: '', tax_number: '', sector: '', notes: '',
   });
 
   const handlePhoto = async () => {
+    console.log('📸 Müşteri: Kamera açılıyor');
     setActiveMethod('photo');
-    const result = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.8 });
+    const result = await ImagePicker.launchCameraAsync({ 
+      mediaTypes: ImagePicker.MediaTypeOptions.Images, 
+      quality: 0.8 
+    });
+    
     if (!result.canceled && result.assets[0]) {
       setLoading(true);
+      setStatusText('Görsel analiz ediliyor...');
       try {
-        const response = await processVoxiChat(
-          'Bu görseldeki firma/kişi bilgilerini JSON olarak çıkar: company_name, contact_person, phone, email, address, tax_number, sector',
-          [{ type: 'image', uri: result.assets[0].uri, name: 'photo' }]
-        );
-        if (response?.message) {
-          try {
-            const parsed = JSON.parse(response.message);
-            setForm(prev => ({ ...prev, ...parsed }));
-          } catch {
-            Alert.alert('Bilgi', response.message);
-          }
+        const visionResult = await processVision(result.assets[0].uri, 'business_card');
+        console.log('🧠 AI Vision sonucu:', visionResult);
+        
+        if (visionResult?.result && typeof visionResult.result === 'object') {
+          setForm(prev => ({ ...prev, ...visionResult.result as any }));
+          await speakText('Kartvizit bilgileri başarıyla okundu. Lütfen kontrol edin.');
         }
+        setStatusText('');
         setActiveMethod('manual');
       } catch (err) {
+        console.error('❌ Görsel analiz hatası:', err);
         Alert.alert('Hata', 'Görsel analiz edilemedi');
+        setActiveMethod(null);
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      setActiveMethod(null);
+    }
+  };
+
+  const handleVoice = async () => {
+    console.log('🎤 Müşteri: Sesli giriş başlatılıyor');
+    setActiveMethod('voice');
+    setStatusText('Basılı tutun ve konuşun');
+  };
+
+  const handleVoiceStart = async () => {
+    try {
+      console.log('🎤 Müşteri: Kayıt başlıyor');
+      setIsRecording(true);
+      setStatusText('Dinliyorum...');
+      const recording = await startRecording();
+      recordingRef.current = recording;
+      console.log('🎤 Müşteri: Kayıt başladı');
+    } catch (error) {
+      console.error('❌ Müşteri: Kayıt başlatma hatası:', error);
+      setIsRecording(false);
+      setStatusText('');
+      Alert.alert('Hata', 'Ses kaydı başlatılamadı');
+    }
+  };
+
+  const handleVoiceStop = async () => {
+    try {
+      if (!recordingRef.current) {
+        setIsRecording(false);
+        setStatusText('');
+        return;
+      }
+
+      console.log('🎤 Müşteri: Kayıt durduruluyor');
+      setIsRecording(false);
+      setIsAnalyzing(true);
+      setStatusText('Analiz ediliyor...');
+
+      const result = await stopRecording(recordingRef.current);
+      recordingRef.current = null;
+
+      if (!result?.uri) {
+        setStatusText('');
+        setIsAnalyzing(false);
+        return;
+      }
+
+      const transcript = await transcribeAudio(result.uri);
+      
+      if (!transcript) {
+        setStatusText('');
+        setIsAnalyzing(false);
+        return;
+      }
+
+      console.log('📝 Müşteri: Transcript:', transcript);
+
+      // AI ile müşteri bilgilerini çıkar
+      const { data, error } = await supabase.functions.invoke('ai-voice', {
+        body: { 
+          transcript,
+          context: 'customer_extraction',
+        }
+      });
+
+      if (error || !data) {
+        throw new Error('AI analizi başarısız');
+      }
+
+      console.log('🧠 Müşteri AI sonucu:', data);
+
+      if (data.data) {
+        setForm(prev => ({ ...prev, ...data.data }));
+        await speakText(data.response || 'Müşteri bilgileri kaydedildi');
+      }
+
+      setStatusText('');
+      setIsAnalyzing(false);
+      setActiveMethod('manual');
+    } catch (error) {
+      console.error('❌ Müşteri: Sesli işleme hatası:', error);
+      Alert.alert('Hata', 'Sesli komut işlenemedi');
+      setIsRecording(false);
+      setIsAnalyzing(false);
+      setStatusText('');
+    }
+  };
+
+  const handleDocument = async () => {
+    console.log('📁 Müşteri: Dosya seçici açılıyor');
+    setActiveMethod('document');
+    const result = await DocumentPicker.getDocumentAsync({
+      type: ['image/*', 'application/pdf'],
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      setLoading(true);
+      setStatusText('Belge analiz ediliyor...');
+      try {
+        const visionResult = await processVision(result.assets[0].uri, 'document');
+        console.log('🧠 Belge AI sonucu:', visionResult);
+        
+        if (visionResult?.result && typeof visionResult.result === 'object') {
+          setForm(prev => ({ ...prev, ...visionResult.result as any }));
+          await speakText('Belge bilgileri başarıyla okundu');
+        }
+        setStatusText('');
+        setActiveMethod('manual');
+      } catch (err) {
+        console.error('❌ Belge analiz hatası:', err);
+        Alert.alert('Hata', 'Belge analiz edilemedi');
         setActiveMethod(null);
       } finally {
         setLoading(false);
@@ -110,6 +237,24 @@ export default function NewCustomerScreen() {
               <Ionicons name="chevron-forward" size={20} color="#C7C7CC" />
             </TouchableOpacity>
 
+            <TouchableOpacity style={styles.methodCard} onPress={handleVoice}>
+              <View style={styles.methodIcon}><Ionicons name="mic-outline" size={28} color="#1A1A1A" /></View>
+              <View style={styles.methodContent}>
+                <Text style={styles.methodTitle}>Sesle Gir</Text>
+                <Text style={styles.methodDesc}>Firma bilgilerini sesle söyle</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#C7C7CC" />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.methodCard} onPress={handleDocument}>
+              <View style={styles.methodIcon}><Ionicons name="document-outline" size={28} color="#1A1A1A" /></View>
+              <View style={styles.methodContent}>
+                <Text style={styles.methodTitle}>Dosya Yükle</Text>
+                <Text style={styles.methodDesc}>PDF veya resim yükle</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#C7C7CC" />
+            </TouchableOpacity>
+
             <TouchableOpacity style={styles.methodCard} onPress={() => setActiveMethod('manual')}>
               <View style={styles.methodIcon}><Ionicons name="create-outline" size={28} color="#1A1A1A" /></View>
               <View style={styles.methodContent}>
@@ -121,10 +266,41 @@ export default function NewCustomerScreen() {
           </View>
         )}
 
-        {loading && (
+        {activeMethod === 'voice' && !loading && !isAnalyzing && (
+          <View style={styles.voiceContainer}>
+            <Text style={styles.sectionTitle}>Sesli Giriş</Text>
+            <Text style={styles.voiceInstruction}>
+              {statusText || 'Butona basılı tutun ve firma bilgilerini söyleyin'}
+            </Text>
+            
+            <View style={styles.voiceMicContainer}>
+              <TouchableOpacity
+                onPressIn={handleVoiceStart}
+                onPressOut={handleVoiceStop}
+                style={[styles.voiceMicButton, isRecording && styles.voiceMicButtonActive]}
+                activeOpacity={0.8}
+              >
+                <Ionicons 
+                  name={isRecording ? "mic" : "mic-outline"} 
+                  size={48} 
+                  color={isRecording ? "#FF3B30" : "#1A1A1A"} 
+                />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity 
+              style={styles.secondaryButton} 
+              onPress={() => setActiveMethod(null)}
+            >
+              <Text style={styles.secondaryButtonText}>İptal</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {(loading || isAnalyzing) && (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#1A1A1A" />
-            <Text style={styles.loadingText}>İşleniyor...</Text>
+            <Text style={styles.loadingText}>{statusText || 'İşleniyor...'}</Text>
           </View>
         )}
 
@@ -187,6 +363,11 @@ const styles = StyleSheet.create({
   methodDesc: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
   loadingContainer: { alignItems: 'center', paddingTop: 60 },
   loadingText: { marginTop: 12, fontSize: 15, color: '#8E8E93' },
+  voiceContainer: { padding: 20, alignItems: 'center' },
+  voiceInstruction: { fontSize: 14, color: '#8E8E93', textAlign: 'center', marginBottom: 40 },
+  voiceMicContainer: { alignItems: 'center', justifyContent: 'center', marginBottom: 40 },
+  voiceMicButton: { width: 120, height: 120, borderRadius: 60, backgroundColor: '#F5F3EF', alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#E5E5EA' },
+  voiceMicButtonActive: { backgroundColor: '#FFE5E5', borderColor: '#FF3B30' },
   formContainer: { padding: 20 },
   inputGroup: { marginBottom: 16 },
   inputLabel: { fontSize: 13, fontWeight: '500', color: '#3C3C43', marginBottom: 6 },

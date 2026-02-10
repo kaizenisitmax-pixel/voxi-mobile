@@ -17,10 +17,11 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
+import { decode } from 'base-64';
 import { supabase } from '@/lib/supabase';
 import { speakText } from '@/utils/audio';
-import { startRecording, stopRecording } from '@/utils/recording';
-import { analyzeOrderCommand } from '@/lib/ai';
+import { startRecording, stopRecording, transcribeAudio } from '@/utils/recording';
+import { processVision } from '@/lib/ai';
 
 interface Order {
   id: string;
@@ -113,10 +114,9 @@ export default function OrderDetail() {
   const fetchLogs = async () => {
     try {
       const { data, error } = await supabase
-        .from('system_logs')
+        .from('order_logs')
         .select('*, user:profiles(full_name)')
-        .eq('entity_type', 'order')
-        .eq('entity_id', id)
+        .eq('order_id', id)
         .order('created_at', { ascending: false })
         .limit(20);
 
@@ -193,11 +193,11 @@ export default function OrderDetail() {
 
       if (error) throw error;
 
-      await supabase.from('system_logs').insert({
-        entity_type: 'order',
-        entity_id: id,
-        action: 'update',
+      await supabase.from('order_logs').insert({
+        order_id: id,
+        action: 'field_update',
         details: { field, old_value: order?.[field as keyof Order], new_value: value },
+        created_at: new Date().toISOString(),
       });
 
       console.log('✅ Alan kaydedildi:', field);
@@ -209,92 +209,71 @@ export default function OrderDetail() {
     }
   };
 
-  // Voice input
-  const handleVoiceInput = async () => {
+  // Voice input for Detail tab (updates order fields)
+  const handleVoiceInputDetail = async () => {
     try {
       if (isRecording) {
-        // Stop recording
-        console.log('🎤 Sipariş: Kayıt durduruluyor');
+        console.log('🎤 Sipariş Detay: Kayıt durduruluyor');
         setIsRecording(false);
         setStatusText('Analiz ediliyor...');
 
         const result = await stopRecording(recordingRef.current);
         recordingRef.current = null;
 
-        if (!result?.uri || !result?.transcript) {
+        if (!result?.uri) {
           setStatusText('');
           return;
         }
 
-        console.log('📝 Sipariş transcript:', result.transcript);
+        const transcript = await transcribeAudio(result.uri);
+        if (!transcript) {
+          setStatusText('');
+          return;
+        }
+
+        console.log('📝 Sipariş Detay transcript:', transcript);
         setIsAnalyzing(true);
 
-        // AI analysis
-        const aiResult = await analyzeOrderCommand(result.transcript, order || {});
-        console.log('🧠 Sipariş AI sonuç:', JSON.stringify(aiResult));
+        const { data: aiResult, error: aiError } = await supabase.functions.invoke('ai-voice', {
+          body: { transcript, context: 'order_detail', order_data: order }
+        });
 
-        // Auto-save updates
-        const updates: any = {};
+        if (aiError || !aiResult) throw new Error('AI analizi başarısız');
+        console.log('🧠 Sipariş Detay AI:', aiResult);
 
-        // Handle details_append (add to existing details)
-        if (aiResult.details_append) {
-          const currentDetails = order?.details || '';
-          const newDetails = currentDetails
-            ? `${currentDetails}\n\n${aiResult.details_append}`
-            : aiResult.details_append;
-          updates.details = newDetails;
-        }
-
-        // Handle other field updates
-        if (aiResult.updates && Object.keys(aiResult.updates).length > 0) {
-          Object.entries(aiResult.updates).forEach(([key, value]) => {
-            if (value !== null && value !== undefined) {
-              updates[key] = value;
-            }
-          });
-        }
-
-        if (Object.keys(updates).length > 0) {
+        if (aiResult.data && Object.keys(aiResult.data).length > 0) {
           const { error } = await supabase
             .from('orders')
-            .update(updates)
+            .update(aiResult.data)
             .eq('id', id);
 
           if (error) throw error;
 
-          console.log('💾 Sipariş güncellendi:', updates);
-
-          await supabase.from('system_logs').insert({
-            entity_type: 'order',
-            entity_id: id,
-            action: 'voice_update',
-            details: { transcript: result.transcript, updates },
+          await supabase.from('order_logs').insert({
+            order_id: id,
+            action: 'voice_update_detail',
+            details: { transcript, updates: aiResult.data },
+            created_at: new Date().toISOString(),
           });
 
           await fetchOrder();
         }
 
-        // TTS response
-        const response = aiResult.spoken_response || 'Tamam';
-        console.log('🔊 Sipariş TTS:', response);
-        await speakText(response);
-
+        await speakText(aiResult.response || 'Sipariş bilgileri güncellendi');
         setStatusText('');
         setIsAnalyzing(false);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } else {
-        // Start recording
-        console.log('🎤 Sipariş: Kayıt başlıyor');
+        console.log('🎤 Sipariş Detay: Kayıt başlıyor');
         setIsRecording(true);
         setStatusText('Dinliyorum...');
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
         const recording = await startRecording();
         recordingRef.current = recording;
-        console.log('🎤 Sipariş: Kayıt başladı');
       }
     } catch (error) {
-      console.error('❌ Ses hatası:', error);
+      console.error('❌ Detay ses hatası:', error);
       setIsRecording(false);
       setIsAnalyzing(false);
       setStatusText('');
@@ -302,8 +281,71 @@ export default function OrderDetail() {
     }
   };
 
-  // Photo analysis
-  const handleTakePhoto = async () => {
+  // Voice input for Media tab (creates media entry)
+  const handleVoiceInputMedia = async () => {
+    try {
+      if (isRecording) {
+        console.log('🎤 Sipariş Medya: Kayıt durduruluyor');
+        setIsRecording(false);
+        setStatusText('Ses kaydediliyor...');
+
+        const result = await stopRecording(recordingRef.current);
+        recordingRef.current = null;
+
+        if (!result?.uri) {
+          setStatusText('');
+          return;
+        }
+
+        // Upload voice file to storage
+        const fileName = `order_voice_${id}_${Date.now()}.wav`;
+        const base64 = await FileSystem.readAsStringAsync(result.uri, {
+          encoding: 'base64',
+        });
+        
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('order-media')
+          .upload(fileName, decode(base64), {
+            contentType: 'audio/wav',
+          });
+
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from('order-media')
+          .getPublicUrl(fileName);
+
+        await supabase.from('order_media').insert({
+          order_id: id,
+          file_name: fileName,
+          file_type: 'audio/wav',
+          file_url: urlData.publicUrl,
+          file_size: result.duration || 0,
+        });
+
+        await fetchMedia();
+        await speakText('Sesli not kaydedildi');
+        setStatusText('');
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } else {
+        console.log('🎤 Sipariş Medya: Kayıt başlıyor');
+        setIsRecording(true);
+        setStatusText('Sesli not kaydediliyor...');
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+        const recording = await startRecording();
+        recordingRef.current = recording;
+      }
+    } catch (error) {
+      console.error('❌ Medya ses hatası:', error);
+      setIsRecording(false);
+      setStatusText('');
+      Alert.alert('Hata', 'Ses kaydı başarısız');
+    }
+  };
+
+  // Photo analysis for Detail tab
+  const handleTakePhotoDetail = async () => {
     try {
       console.log('📸 Sipariş: Kamera açılıyor');
       const result = await ImagePicker.launchCameraAsync({
@@ -359,11 +401,11 @@ export default function OrderDetail() {
 
         console.log('💾 Sipariş fotoğraftan güncellendi:', updates);
 
-        await supabase.from('system_logs').insert({
-          entity_type: 'order',
-          entity_id: id,
+        await supabase.from('order_logs').insert({
+          order_id: id,
           action: 'photo_analysis',
           details: { updates },
+          created_at: new Date().toISOString(),
         });
 
         await fetchOrder();
@@ -414,8 +456,57 @@ export default function OrderDetail() {
     }
   };
 
-  // File upload
-  const handleFileUpload = async () => {
+  // Photo for Media tab (just uploads to media)
+  const handleTakePhotoMedia = async () => {
+    try {
+      console.log('📸 Sipariş Medya: Kamera açılıyor');
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.7,
+      });
+
+      if (result.canceled) return;
+
+      setStatusText('Fotoğraf yükleniyor...');
+
+      const fileName = `order_${id}_${Date.now()}.jpg`;
+      const fileUri = result.assets[0].uri;
+
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('order-media')
+        .upload(fileName, {
+          uri: fileUri,
+          type: 'image/jpeg',
+          name: fileName,
+        } as any);
+
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage
+        .from('order-media')
+        .getPublicUrl(fileName);
+
+      await supabase.from('order_media').insert({
+        order_id: id,
+        file_name: fileName,
+        file_type: 'image/jpeg',
+        file_url: urlData.publicUrl,
+        file_size: result.assets[0].fileSize || 0,
+      });
+
+      await fetchMedia();
+      await speakText('Fotoğraf eklendi');
+      setStatusText('');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      console.error('❌ Medya fotoğraf hatası:', error);
+      setStatusText('');
+      Alert.alert('Hata', 'Fotoğraf yüklenemedi');
+    }
+  };
+
+  // File upload for Detail tab
+  const handleFileUploadDetail = async () => {
     try {
       console.log('📁 Sipariş: Dosya seçici açılıyor');
       const result = await DocumentPicker.getDocumentAsync({
@@ -476,11 +567,11 @@ export default function OrderDetail() {
 
         console.log('💾 Sipariş dosyadan güncellendi:', updates);
 
-        await supabase.from('system_logs').insert({
-          entity_type: 'order',
-          entity_id: id,
+        await supabase.from('order_logs').insert({
+          order_id: id,
           action: 'file_analysis',
           details: { updates },
+          created_at: new Date().toISOString(),
         });
 
         await fetchOrder();
@@ -528,6 +619,54 @@ export default function OrderDetail() {
       setIsAnalyzing(false);
       setStatusText('');
       Alert.alert('Hata', 'Dosya analizi başarısız');
+    }
+  };
+
+  // File upload for Media tab (just uploads to media)
+  const handleFileUploadMedia = async () => {
+    try {
+      console.log('📁 Sipariş Medya: Dosya seçici açılıyor');
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['image/*', 'application/pdf'],
+      });
+
+      if (result.canceled) return;
+
+      setStatusText('Dosya yükleniyor...');
+
+      const fileName = `order_${id}_${Date.now()}_${result.assets[0].name}`;
+      const fileUri = result.assets[0].uri;
+
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('order-media')
+        .upload(fileName, {
+          uri: fileUri,
+          type: result.assets[0].mimeType,
+          name: fileName,
+        } as any);
+
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage
+        .from('order-media')
+        .getPublicUrl(fileName);
+
+      await supabase.from('order_media').insert({
+        order_id: id,
+        file_name: fileName,
+        file_type: result.assets[0].mimeType || 'application/octet-stream',
+        file_url: urlData.publicUrl,
+        file_size: result.assets[0].size || 0,
+      });
+
+      await fetchMedia();
+      await speakText('Dosya eklendi');
+      setStatusText('');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      console.error('❌ Medya dosya hatası:', error);
+      setStatusText('');
+      Alert.alert('Hata', 'Dosya yüklenemedi');
     }
   };
 
@@ -607,23 +746,25 @@ export default function OrderDetail() {
         </View>
       </View>
 
-      {/* Action Buttons */}
+      {/* Action Buttons - Tab Specific */}
       <View style={{ backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#E5E5EA' }}>
         <Text style={{ fontSize: 14, color: '#8E8E93', textAlign: 'center', marginBottom: 12 }}>
-          Sipariş detaylarını hızlıca girin
+          {activeTab === 'detail' ? 'Sipariş bilgilerini hızlıca girin' : 'Medya ekleyin'}
         </Text>
         <View style={{ flexDirection: 'row', gap: 12 }}>
           <TouchableOpacity
-            onPress={handleVoiceInput}
+            onPress={activeTab === 'detail' ? handleVoiceInputDetail : handleVoiceInputMedia}
             disabled={isAnalyzing}
             style={{ flex: 1, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#E5E5EA', paddingVertical: 16, alignItems: 'center' }}
           >
             <Ionicons name="mic" size={28} color={isRecording ? '#FF3B30' : '#1A1A1A'} />
-            <Text style={{ fontSize: 12, color: '#3C3C43', marginTop: 6 }}>Sesle Gir</Text>
+            <Text style={{ fontSize: 12, color: '#3C3C43', marginTop: 6 }}>
+              {activeTab === 'detail' ? 'Sesle Gir' : 'Sesli Not'}
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            onPress={handleTakePhoto}
+            onPress={activeTab === 'detail' ? handleTakePhotoDetail : handleTakePhotoMedia}
             disabled={isAnalyzing}
             style={{ flex: 1, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#E5E5EA', paddingVertical: 16, alignItems: 'center' }}
           >
@@ -632,7 +773,7 @@ export default function OrderDetail() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            onPress={handleFileUpload}
+            onPress={activeTab === 'detail' ? handleFileUploadDetail : handleFileUploadMedia}
             disabled={isAnalyzing}
             style={{ flex: 1, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#E5E5EA', paddingVertical: 16, alignItems: 'center' }}
           >

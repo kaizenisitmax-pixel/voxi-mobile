@@ -70,6 +70,15 @@ export default function CustomerDetail() {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValues, setEditValues] = useState<any>({});
 
+  // Transaction modal states
+  const [showTransactionModal, setShowTransactionModal] = useState(false);
+  const [transactionForm, setTransactionForm] = useState({
+    type: 'credit' as 'debit' | 'credit',
+    amount: '',
+    description: '',
+    date: new Date().toISOString().split('T')[0],
+  });
+
   // Voice & AI states
   const [isRecording, setIsRecording] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -101,7 +110,7 @@ export default function CustomerDetail() {
         .from('customer_transactions')
         .select('*')
         .eq('customer_id', id)
-        .order('transaction_date', { ascending: false });
+        .order('created_at', { ascending: false });
 
       if (error) throw error;
       setTransactions(data || []);
@@ -114,10 +123,9 @@ export default function CustomerDetail() {
   const fetchLogs = async () => {
     try {
       const { data, error } = await supabase
-        .from('system_logs')
+        .from('customer_logs')
         .select('*, user:profiles(full_name)')
-        .eq('entity_type', 'customer')
-        .eq('entity_id', id)
+        .eq('customer_id', id)
         .order('created_at', { ascending: false })
         .limit(20);
 
@@ -205,6 +213,40 @@ export default function CustomerDetail() {
     setRefreshing(true);
     await Promise.all([fetchCustomer(), fetchTransactions(), fetchLogs()]);
     setRefreshing(false);
+  };
+
+  // Add transaction
+  const handleAddTransaction = async () => {
+    if (!transactionForm.amount || !transactionForm.description) {
+      Alert.alert('Hata', 'Tutar ve açıklama gereklidir');
+      return;
+    }
+
+    try {
+      const { error } = await supabase.from('customer_transactions').insert({
+        customer_id: id,
+        transaction_type: transactionForm.type,
+        amount: parseFloat(transactionForm.amount),
+        description: transactionForm.description,
+        transaction_date: transactionForm.date,
+        created_at: new Date().toISOString(),
+      });
+
+      if (error) throw error;
+
+      Alert.alert('Başarılı', 'İşlem eklendi');
+      setShowTransactionModal(false);
+      setTransactionForm({
+        type: 'credit',
+        amount: '',
+        description: '',
+        date: new Date().toISOString().split('T')[0],
+      });
+      await fetchTransactions();
+    } catch (error: any) {
+      console.error('❌ İşlem ekleme hatası:', error);
+      Alert.alert('Hata', error.message);
+    }
   };
 
   // Auto-save field
@@ -763,7 +805,15 @@ export default function CustomerDetail() {
 
           {/* Transactions */}
           <View style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16 }}>
-            <Text style={{ fontSize: 15, fontWeight: '600', color: '#1A1A1A', marginBottom: 12 }}>İşlemler</Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <Text style={{ fontSize: 15, fontWeight: '600', color: '#1A1A1A' }}>İşlemler</Text>
+              <TouchableOpacity
+                onPress={() => setShowTransactionModal(true)}
+                style={{ backgroundColor: '#1A1A1A', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}
+              >
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#FFFFFF' }}>+ Ekle</Text>
+              </TouchableOpacity>
+            </View>
             {transactions.length === 0 ? (
               <Text style={{ fontSize: 14, color: '#8E8E93', textAlign: 'center', paddingVertical: 20 }}>
                 Henüz işlem kaydı yok
@@ -779,13 +829,91 @@ export default function CustomerDetail() {
                       {new Date(transaction.transaction_date).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' })}
                     </Text>
                   </View>
-                  <Text style={{ fontSize: 16, fontWeight: '700', color: transaction.transaction_type === 'debit' ? '#1A1A1A' : '#1A1A1A' }}>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: transaction.transaction_type === 'debit' ? '#34C759' : '#FF3B30' }}>
                     {transaction.transaction_type === 'debit' ? '+' : '-'}₺{transaction.amount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
                   </Text>
                 </View>
               ))
             )}
           </View>
+
+          {/* Transaction Modal */}
+          {showTransactionModal && (
+            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+              <View style={{ backgroundColor: '#FFFFFF', borderRadius: 16, padding: 20, width: '100%', maxWidth: 400 }}>
+                <Text style={{ fontSize: 18, fontWeight: '700', color: '#1A1A1A', marginBottom: 16 }}>İşlem Ekle</Text>
+
+                {/* Transaction Type */}
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '500', color: '#3C3C43', marginBottom: 8 }}>İşlem Tipi</Text>
+                  <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <TouchableOpacity
+                      onPress={() => setTransactionForm(p => ({ ...p, type: 'credit' }))}
+                      style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: transactionForm.type === 'credit' ? '#FF3B30' : '#F5F3EF', alignItems: 'center' }}
+                    >
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: transactionForm.type === 'credit' ? '#FFFFFF' : '#1A1A1A' }}>Borç (-)</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => setTransactionForm(p => ({ ...p, type: 'debit' }))}
+                      style={{ flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: transactionForm.type === 'debit' ? '#34C759' : '#F5F3EF', alignItems: 'center' }}
+                    >
+                      <Text style={{ fontSize: 14, fontWeight: '600', color: transactionForm.type === 'debit' ? '#FFFFFF' : '#1A1A1A' }}>Alacak (+)</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Amount */}
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '500', color: '#3C3C43', marginBottom: 8 }}>Tutar (₺)</Text>
+                  <TextInput
+                    value={transactionForm.amount}
+                    onChangeText={(t) => setTransactionForm(p => ({ ...p, amount: t }))}
+                    placeholder="0.00"
+                    keyboardType="decimal-pad"
+                    style={{ backgroundColor: '#F5F3EF', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, color: '#1A1A1A' }}
+                  />
+                </View>
+
+                {/* Description */}
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '500', color: '#3C3C43', marginBottom: 8 }}>Açıklama</Text>
+                  <TextInput
+                    value={transactionForm.description}
+                    onChangeText={(t) => setTransactionForm(p => ({ ...p, description: t }))}
+                    placeholder="İşlem açıklaması"
+                    style={{ backgroundColor: '#F5F3EF', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, color: '#1A1A1A' }}
+                  />
+                </View>
+
+                {/* Date */}
+                <View style={{ marginBottom: 20 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '500', color: '#3C3C43', marginBottom: 8 }}>Tarih</Text>
+                  <TextInput
+                    value={transactionForm.date}
+                    onChangeText={(t) => setTransactionForm(p => ({ ...p, date: t }))}
+                    placeholder="YYYY-MM-DD"
+                    style={{ backgroundColor: '#F5F3EF', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16, color: '#1A1A1A' }}
+                  />
+                </View>
+
+                {/* Buttons */}
+                <View style={{ flexDirection: 'row', gap: 12 }}>
+                  <TouchableOpacity
+                    onPress={() => setShowTransactionModal(false)}
+                    style={{ flex: 1, paddingVertical: 14, borderRadius: 10, backgroundColor: '#F5F3EF', alignItems: 'center' }}
+                  >
+                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#1A1A1A' }}>İptal</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={handleAddTransaction}
+                    style={{ flex: 1, paddingVertical: 14, borderRadius: 10, backgroundColor: '#1A1A1A', alignItems: 'center' }}
+                  >
+                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#FFFFFF' }}>Kaydet</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
         </ScrollView>
       )}
     </View>
