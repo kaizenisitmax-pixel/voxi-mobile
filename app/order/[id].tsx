@@ -17,7 +17,6 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
-import { decode } from 'base-64';
 import { supabase } from '@/lib/supabase';
 import { speakText } from '@/utils/audio';
 import { startRecording, stopRecording, transcribeAudio } from '@/utils/recording';
@@ -303,9 +302,12 @@ export default function OrderDetail() {
           encoding: 'base64',
         });
         
+        // Convert base64 to blob
+        const blob = await (await fetch(`data:audio/wav;base64,${base64}`)).blob();
+        
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from('order-media')
-          .upload(fileName, decode(base64), {
+          .upload(fileName, blob, {
             contentType: 'audio/wav',
           });
 
