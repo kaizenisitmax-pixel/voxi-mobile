@@ -360,11 +360,11 @@ export default function TasksScreen() {
                         <View style={styles.urgentBadge}>
                           <Text style={styles.urgentBadgeText}>ACİL</Text>
                         </View>
-                      ) : (
+                      ) : task.priority === 'normal' ? (
                         <View style={styles.normalBadge}>
                           <Text style={styles.normalBadgeText}>NORMAL</Text>
                         </View>
-                      )}
+                      ) : null}
 
                       {/* Tarih */}
                       {task.due_date && (

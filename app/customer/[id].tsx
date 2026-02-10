@@ -1,425 +1,793 @@
-import { useState, useEffect, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Alert, StyleSheet, Linking, ActivityIndicator } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  View,
+  Text,
+  ScrollView,
+  TextInput,
+  TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
+  Alert,
+  Pressable,
+} from 'react-native';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '../../lib/supabase';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
+import * as Haptics from 'expo-haptics';
+import { supabase } from '@/lib/supabase';
+import { speakText } from '@/utils/audio';
+import { startRecording, stopRecording } from '@/utils/recording';
+import { analyzeCustomerCommand } from '@/lib/ai';
 
-const C = {
-  bg: '#F5F3EF',
-  surface: '#FFFFFF',
-  text: '#1A1A1A',
-  textSec: '#3C3C43',
-  textTer: '#8E8E93',
-  border: '#F2F2F7',
-  iconColor: '#3C3C43',
-  avatarBg: '#E5E5EA',
-  avatarText: '#3C3C43',
-};
+interface Customer {
+  id: string;
+  company_name: string;
+  contact_name: string | null;
+  phone: string | null;
+  email: string | null;
+  billing_address: string | null;
+  shipping_address: string | null;
+  tax_office: string | null;
+  tax_number: string | null;
+  notes: string | null;
+  is_active: boolean;
+  created_at: string;
+  created_by: string;
+  workspace_id: string;
+}
 
-export default function CustomerDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+interface Transaction {
+  id: string;
+  transaction_type: 'debit' | 'credit';
+  amount: number;
+  description: string;
+  transaction_date: string;
+  created_at: string;
+}
+
+interface Log {
+  id: string;
+  action: string;
+  details: any;
+  created_at: string;
+  user_name: string;
+}
+
+export default function CustomerDetail() {
+  const { id, taskId } = useLocalSearchParams<{ id: string; taskId?: string }>();
   const router = useRouter();
-  const [customer, setCustomer] = useState<any>(null);
-  const [tasks, setTasks] = useState<any[]>([]);
-  const [stakeholders, setStakeholders] = useState<any[]>([]);
-  const [notes, setNotes] = useState<any[]>([]);
+
+  const [customer, setCustomer] = useState<Customer | null>(null);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [logs, setLogs] = useState<Log[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [activeTab, setActiveTab] = useState<'detail' | 'accounting'>('detail');
 
-  const fetchData = useCallback(async () => {
-    if (!id) return;
-    setLoading(true);
+  // Editing states
+  const [editingField, setEditingField] = useState<string | null>(null);
+  const [editValues, setEditValues] = useState<any>({});
 
-    // Müşteri bilgisi
-    const { data: cust } = await supabase
-      .from('customers').select('*').eq('id', id).single();
-    setCustomer(cust);
+  // Voice & AI states
+  const [isRecording, setIsRecording] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [statusText, setStatusText] = useState('');
+  const recordingRef = useRef<any>(null);
 
-    // Bağlı görevler
-    const { data: taskList } = await supabase
-      .from('tasks').select('id, title, priority, status, due_date')
-      .eq('customer_id', id).order('created_at', { ascending: false });
-    setTasks(taskList || []);
+  // Fetch customer data
+  const fetchCustomer = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('id', id)
+        .single();
 
-    // Bağlı paydaşlar
-    const { data: stakeList } = await supabase
-      .from('stakeholders').select('id, name, role_title, phone')
-      .eq('customer_id', id);
-    setStakeholders(stakeList || []);
+      if (error) throw error;
+      setCustomer(data);
+      setEditValues(data);
+    } catch (error) {
+      console.error('❌ Müşteri fetch hatası:', error);
+      Alert.alert('Hata', 'Müşteri bilgileri yüklenemedi');
+    }
+  };
 
-    // Notlar
-    const { data: noteList } = await supabase
-      .from('card_notes').select('*')
-      .eq('card_type', 'customer').eq('card_id', id)
-      .order('created_at', { ascending: false });
-    setNotes(noteList || []);
+  // Fetch transactions
+  const fetchTransactions = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('customer_transactions')
+        .select('*')
+        .eq('customer_id', id)
+        .order('transaction_date', { ascending: false });
 
-    setLoading(false);
+      if (error) throw error;
+      setTransactions(data || []);
+    } catch (error) {
+      console.error('❌ İşlemler fetch hatası:', error);
+    }
+  };
+
+  // Fetch logs
+  const fetchLogs = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('system_logs')
+        .select('*, user:profiles(full_name)')
+        .eq('entity_type', 'customer')
+        .eq('entity_id', id)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (error) throw error;
+
+      const formattedLogs = (data || []).map((log: any) => ({
+        ...log,
+        user_name: log.user?.full_name || 'Bilinmeyen',
+      }));
+
+      setLogs(formattedLogs);
+    } catch (error) {
+      console.error('❌ Loglar fetch hatası:', error);
+    }
+  };
+
+  // Initial load
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true);
+      await Promise.all([fetchCustomer(), fetchTransactions(), fetchLogs()]);
+      setLoading(false);
+    };
+    loadData();
   }, [id]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  // Link customer to task if taskId is provided
+  useEffect(() => {
+    const linkCustomerToTask = async () => {
+      if (taskId && customer) {
+        try {
+          console.log('🔗 Müşteriyi göreve bağlıyorum:', { taskId, customerId: id });
+          const { error } = await supabase
+            .from('tasks')
+            .update({ 
+              customer_id: id, 
+              customer_name: customer.company_name 
+            })
+            .eq('id', taskId);
 
-  // İletişim bilgisi düzenleme
-  const editField = (field: string, label: string, currentValue: string) => {
-    Alert.prompt(label, `Yeni ${label.toLowerCase()} girin`, async (text) => {
-      if (text?.trim()) {
-        await supabase.from('customers').update({ [field]: text.trim() }).eq('id', id);
-        fetchData();
+          if (error) throw error;
+          console.log('✅ Müşteri göreve bağlandı');
+        } catch (error) {
+          console.error('❌ Müşteri bağlama hatası:', error);
+        }
       }
-    }, 'plain-text', currentValue || '');
-  };
+    };
+    linkCustomerToTask();
+  }, [taskId, customer?.company_name]);
 
-  // Not ekleme
-  const addNote = () => {
-    Alert.prompt('Not Ekle', 'Notunuzu yazın', async (text) => {
-      if (text?.trim()) {
-        await supabase.from('card_notes').insert({
-          card_type: 'customer', card_id: id,
-          content: text.trim(), created_by: 'Volkan',
-        });
-        fetchData();
-      }
-    });
-  };
-
-  // Müşteri silme
-  const deleteCustomer = () => {
-    Alert.alert('Müşteriyi Sil', `${customer?.company_name} silinecek. Emin misiniz?`, [
-      { text: 'İptal', style: 'cancel' },
-      {
-        text: 'Sil', style: 'destructive',
-        onPress: async () => {
-          await supabase.from('customers').delete().eq('id', id);
-          router.back();
+  // Realtime subscription
+  useEffect(() => {
+    const channel = supabase
+      .channel('customer-' + id)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'customers',
+          filter: `id=eq.${id}`,
         },
-      },
-    ]);
+        () => {
+          console.log('🔄 Müşteri realtime güncelleme');
+          fetchCustomer();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [id]);
+
+  // Focus effect
+  useFocusEffect(
+    useCallback(() => {
+      console.log('👁️ Müşteri kartı odaklandı, yenileniyor');
+      fetchCustomer();
+    }, [id])
+  );
+
+  // Pull to refresh
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await Promise.all([fetchCustomer(), fetchTransactions(), fetchLogs()]);
+    setRefreshing(false);
   };
 
-  const callPhone = () => {
-    if (customer?.phone) {
-      Linking.openURL(`tel:${customer.phone}`);
+  // Auto-save field
+  const saveField = async (field: string, value: any) => {
+    try {
+      console.log('💾 Alan kaydediliyor:', { field, value });
+      const { error } = await supabase
+        .from('customers')
+        .update({ [field]: value })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      await supabase.from('system_logs').insert({
+        entity_type: 'customer',
+        entity_id: id,
+        action: 'update',
+        details: { field, old_value: customer?.[field as keyof Customer], new_value: value },
+      });
+
+      console.log('✅ Alan kaydedildi:', field);
+      await fetchCustomer();
+      setEditingField(null);
+    } catch (error) {
+      console.error('❌ Kaydetme hatası:', error);
+      Alert.alert('Hata', 'Kaydetme başarısız');
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'active': return { bg: '#F2F2F7', text: '#1A1A1A', label: 'Aktif' };
-      case 'lead': return { bg: '#F5F3EF', text: '#1A1A1A', label: 'Lead' };
-      case 'inactive': return { bg: '#F2F2F7', text: '#8E8E93', label: 'Pasif' };
-      case 'lost': return { bg: '#F2F2F7', text: '#8E8E93', label: 'Kayıp' };
-      default: return { bg: '#F2F2F7', text: '#8E8E93', label: 'Bilinmiyor' };
+  // Voice input
+  const handleVoiceInput = async () => {
+    try {
+      if (isRecording) {
+        // Stop recording
+        console.log('🎤 Müşteri: Kayıt durduruluyor');
+        setIsRecording(false);
+        setStatusText('Analiz ediliyor...');
+
+        const result = await stopRecording(recordingRef.current);
+        recordingRef.current = null;
+
+        if (!result?.uri || !result?.transcript) {
+          setStatusText('');
+          return;
+        }
+
+        console.log('📝 Müşteri transcript:', result.transcript);
+        setIsAnalyzing(true);
+
+        // AI analysis
+        const aiResult = await analyzeCustomerCommand(result.transcript, customer || {});
+        console.log('🧠 Müşteri AI sonuç:', JSON.stringify(aiResult));
+
+        // Auto-save updates
+        if (aiResult.updates && Object.keys(aiResult.updates).length > 0) {
+          const validUpdates: any = {};
+          Object.entries(aiResult.updates).forEach(([key, value]) => {
+            if (value !== null && value !== undefined) {
+              validUpdates[key] = value;
+            }
+          });
+
+          if (Object.keys(validUpdates).length > 0) {
+            const { error } = await supabase
+              .from('customers')
+              .update(validUpdates)
+              .eq('id', id);
+
+            if (error) throw error;
+
+            console.log('💾 Müşteri güncellendi:', validUpdates);
+
+            await supabase.from('system_logs').insert({
+              entity_type: 'customer',
+              entity_id: id,
+              action: 'voice_update',
+              details: { transcript: result.transcript, updates: validUpdates },
+            });
+
+            await fetchCustomer();
+          }
+        }
+
+        // TTS response
+        const response = aiResult.spoken_response || 'Tamam';
+        console.log('🔊 Müşteri TTS:', response);
+        await speakText(response);
+
+        setStatusText('');
+        setIsAnalyzing(false);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } else {
+        // Start recording
+        console.log('🎤 Müşteri: Kayıt başlıyor');
+        setIsRecording(true);
+        setStatusText('Dinliyorum...');
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+        const recording = await startRecording();
+        recordingRef.current = recording;
+        console.log('🎤 Müşteri: Kayıt başladı');
+      }
+    } catch (error) {
+      console.error('❌ Ses hatası:', error);
+      setIsRecording(false);
+      setIsAnalyzing(false);
+      setStatusText('');
+      Alert.alert('Hata', 'Ses kaydı başarısız');
     }
   };
 
-  const getPriorityIcon = (priority: string) => {
-    switch (priority) {
-      case 'urgent': return '🔴';
-      case 'normal': return '🟡';
-      case 'low': return '🟢';
-      default: return '⚪';
+  // Photo analysis
+  const handleTakePhoto = async () => {
+    try {
+      console.log('📸 Müşteri: Kamera açılıyor');
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.7,
+        base64: true,
+      });
+
+      if (result.canceled) return;
+
+      console.log('📸 Base64 boyut:', result.assets[0].base64?.length);
+      setIsAnalyzing(true);
+      setStatusText('Fotoğraf analiz ediliyor...');
+
+      // AI Vision analysis
+      const { analyzeImageForCard } = await import('@/lib/ai');
+      const analysis = await analyzeImageForCard(
+        result.assets[0].base64!,
+        'customer',
+        customer || {}
+      );
+
+      console.log('🧠 Müşteri görsel analiz:', analysis);
+
+      // Auto-save updates
+      if (analysis.updates && Object.keys(analysis.updates).length > 0) {
+        const validUpdates: any = {};
+        Object.entries(analysis.updates).forEach(([key, value]) => {
+          if (value !== null && value !== undefined) {
+            validUpdates[key] = value;
+          }
+        });
+
+        if (Object.keys(validUpdates).length > 0) {
+          const { error } = await supabase
+            .from('customers')
+            .update(validUpdates)
+            .eq('id', id);
+
+          if (error) throw error;
+
+          console.log('💾 Müşteri fotoğraftan güncellendi:', validUpdates);
+
+          await supabase.from('system_logs').insert({
+            entity_type: 'customer',
+            entity_id: id,
+            action: 'photo_analysis',
+            details: { updates: validUpdates },
+          });
+
+          await fetchCustomer();
+        }
+      }
+
+      // TTS response
+      const response = analysis.spoken_response || 'Bilgiler güncellendi';
+      console.log('🔊 Müşteri görsel TTS:', response);
+      await speakText(response);
+
+      setStatusText('');
+      setIsAnalyzing(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      console.error('❌ Fotoğraf hatası:', error);
+      setIsAnalyzing(false);
+      setStatusText('');
+      Alert.alert('Hata', 'Fotoğraf analizi başarısız');
     }
   };
 
-  if (loading || !customer) {
+  // File upload
+  const handleFileUpload = async () => {
+    try {
+      console.log('📁 Müşteri: Dosya seçici açılıyor');
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['image/*', 'application/pdf'],
+      });
+
+      if (result.canceled) return;
+
+      console.log('📁 Dosya boyut:', result.assets[0].size);
+      setIsAnalyzing(true);
+      setStatusText('Dosya analiz ediliyor...');
+
+      // Read file as base64
+      const base64 = await FileSystem.readAsStringAsync(result.assets[0].uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      console.log('📁 Base64 boyut:', base64.length);
+
+      // AI analysis
+      const { analyzeImageForCard } = await import('@/lib/ai');
+      const analysis = await analyzeImageForCard(
+        base64,
+        'customer',
+        customer || {}
+      );
+
+      console.log('🧠 Müşteri dosya analiz:', analysis);
+
+      // Auto-save updates
+      if (analysis.updates && Object.keys(analysis.updates).length > 0) {
+        const validUpdates: any = {};
+        Object.entries(analysis.updates).forEach(([key, value]) => {
+          if (value !== null && value !== undefined) {
+            validUpdates[key] = value;
+          }
+        });
+
+        if (Object.keys(validUpdates).length > 0) {
+          const { error } = await supabase
+            .from('customers')
+            .update(validUpdates)
+            .eq('id', id);
+
+          if (error) throw error;
+
+          console.log('💾 Müşteri dosyadan güncellendi:', validUpdates);
+
+          await supabase.from('system_logs').insert({
+            entity_type: 'customer',
+            entity_id: id,
+            action: 'file_analysis',
+            details: { updates: validUpdates },
+          });
+
+          await fetchCustomer();
+        }
+      }
+
+      // TTS response
+      const response = analysis.spoken_response || 'Bilgiler güncellendi';
+      console.log('🔊 Müşteri dosya TTS:', response);
+      await speakText(response);
+
+      setStatusText('');
+      setIsAnalyzing(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      console.error('❌ Dosya hatası:', error);
+      setIsAnalyzing(false);
+      setStatusText('');
+      Alert.alert('Hata', 'Dosya analizi başarısız');
+    }
+  };
+
+  // Calculate balance
+  const calculateBalance = () => {
+    const totalDebit = transactions
+      .filter((t) => t.transaction_type === 'debit')
+      .reduce((sum, t) => sum + t.amount, 0);
+
+    const totalCredit = transactions
+      .filter((t) => t.transaction_type === 'credit')
+      .reduce((sum, t) => sum + t.amount, 0);
+
+    return {
+      totalDebit,
+      totalCredit,
+      balance: totalDebit - totalCredit,
+    };
+  };
+
+  const balance = calculateBalance();
+
+  if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          <ActivityIndicator color="#1A1A1A" size="large" />
-          <Text style={styles.loadingText}>Yükleniyor...</Text>
-        </View>
-      </SafeAreaView>
+      <View style={{ flex: 1, backgroundColor: '#F5F3EF', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#1A1A1A" />
+      </View>
     );
   }
 
-  const badge = getStatusBadge(customer.status);
+  if (!customer) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#F5F3EF', justifyContent: 'center', alignItems: 'center' }}>
+        <Text style={{ fontSize: 16, color: '#8E8E93' }}>Müşteri bulunamadı</Text>
+      </View>
+    );
+  }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={{ flex: 1, backgroundColor: '#F5F3EF' }}>
       {/* Header */}
-      <View style={{
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 20,
-        paddingVertical: 12,
-        backgroundColor: C.surface,
-        borderBottomWidth: 0.5,
-        borderBottomColor: C.border,
-      }}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Text style={{ fontSize: 16, color: '#1A1A1A' }}>Geri</Text>
-        </TouchableOpacity>
-        <Text style={{ fontSize: 17, fontWeight: '600', color: C.text }}>Müşteri Kartı</Text>
-        <View style={{ width: 50 }} />
+      <View style={{ backgroundColor: '#FFFFFF', paddingTop: 60, paddingBottom: 16, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: '#E5E5EA' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <TouchableOpacity onPress={() => router.back()}>
+            <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => Alert.alert('Düzenle', 'Düzenleme özelliği yakında')}>
+            <Ionicons name="create-outline" size={24} color="#1A1A1A" />
+          </TouchableOpacity>
+        </View>
+
+        <Text style={{ fontSize: 24, fontWeight: '700', color: '#1A1A1A', marginBottom: 4 }}>
+          {customer.company_name}
+        </Text>
+        <Text style={{ fontSize: 14, color: '#8E8E93' }}>
+          {new Date(customer.created_at).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' })} oluşturuldu
+        </Text>
       </View>
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 30 }}>
-        {/* BÖLÜM 1 - MÜŞTERİ BAŞLIĞI */}
-        <View style={{ backgroundColor: C.surface, padding: 20, marginBottom: 8 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 12 }}>
-            {/* Avatar */}
-            <View style={{
-              width: 48,
-              height: 48,
-              borderRadius: 24,
-              backgroundColor: C.avatarBg,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
-              <Text style={{ fontSize: 20, fontWeight: '700', color: C.avatarText }}>
-                {customer.company_name.substring(0, 2).toUpperCase()}
-              </Text>
+      {/* Action Buttons */}
+      <View style={{ backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: '#E5E5EA' }}>
+        <Text style={{ fontSize: 14, color: '#8E8E93', textAlign: 'center', marginBottom: 12 }}>
+          Firma bilgilerini hızlıca girin
+        </Text>
+        <View style={{ flexDirection: 'row', gap: 12 }}>
+          <TouchableOpacity
+            onPress={handleVoiceInput}
+            disabled={isAnalyzing}
+            style={{ flex: 1, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#E5E5EA', paddingVertical: 16, alignItems: 'center' }}
+          >
+            <Ionicons name="mic" size={28} color={isRecording ? '#FF3B30' : '#1A1A1A'} />
+            <Text style={{ fontSize: 12, color: '#3C3C43', marginTop: 6 }}>Sesle Gir</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={handleTakePhoto}
+            disabled={isAnalyzing}
+            style={{ flex: 1, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#E5E5EA', paddingVertical: 16, alignItems: 'center' }}
+          >
+            <Ionicons name="camera" size={28} color="#1A1A1A" />
+            <Text style={{ fontSize: 12, color: '#3C3C43', marginTop: 6 }}>Fotoğraf Çek</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={handleFileUpload}
+            disabled={isAnalyzing}
+            style={{ flex: 1, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#E5E5EA', paddingVertical: 16, alignItems: 'center' }}
+          >
+            <Ionicons name="cloud-upload-outline" size={28} color="#1A1A1A" />
+            <Text style={{ fontSize: 12, color: '#3C3C43', marginTop: 6 }}>Dosya Yükle</Text>
+          </TouchableOpacity>
+        </View>
+
+        {(isAnalyzing || statusText) && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 12, gap: 8 }}>
+            {isAnalyzing && <ActivityIndicator size="small" color="#8E8E93" />}
+            <Text style={{ fontSize: 13, color: '#8E8E93' }}>{statusText}</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Tabs */}
+      <View style={{ flexDirection: 'row', backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#E5E5EA' }}>
+        <TouchableOpacity
+          onPress={() => setActiveTab('detail')}
+          style={{ flex: 1, paddingVertical: 14, borderBottomWidth: 2, borderBottomColor: activeTab === 'detail' ? '#1A1A1A' : 'transparent' }}
+        >
+          <Text style={{ fontSize: 15, fontWeight: '600', color: activeTab === 'detail' ? '#1A1A1A' : '#8E8E93', textAlign: 'center' }}>
+            Detay
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => setActiveTab('accounting')}
+          style={{ flex: 1, paddingVertical: 14, borderBottomWidth: 2, borderBottomColor: activeTab === 'accounting' ? '#1A1A1A' : 'transparent' }}
+        >
+          <Text style={{ fontSize: 15, fontWeight: '600', color: activeTab === 'accounting' ? '#1A1A1A' : '#8E8E93', textAlign: 'center' }}>
+            Muhasebe
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Tab Content */}
+      {activeTab === 'detail' ? (
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: 16, gap: 12 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1A1A1A" />}
+        >
+          {/* Contact Info */}
+          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16, gap: 12 }}>
+            <Text style={{ fontSize: 15, fontWeight: '600', color: '#1A1A1A', marginBottom: 4 }}>İletişim Bilgileri</Text>
+
+            <View>
+              <Text style={{ fontSize: 13, color: '#8E8E93', marginBottom: 4 }}>Yetkili Kişi</Text>
+              <TextInput
+                value={editingField === 'contact_name' ? editValues.contact_name : customer.contact_name || '—'}
+                onChangeText={(text) => setEditValues({ ...editValues, contact_name: text })}
+                onFocus={() => setEditingField('contact_name')}
+                onBlur={() => saveField('contact_name', editValues.contact_name)}
+                style={{ fontSize: 15, color: '#1A1A1A', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: editingField === 'contact_name' ? '#1A1A1A' : 'transparent' }}
+              />
             </View>
 
-            {/* Firma adı + badge */}
-            <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Text style={{ fontSize: 22, fontWeight: '700', color: C.text }}>
-                  {customer.company_name}
-                </Text>
-                <View style={{
-                  backgroundColor: badge.bg,
-                  paddingHorizontal: 8,
-                  paddingVertical: 4,
-                  borderRadius: 6,
-                }}>
-                  <Text style={{ fontSize: 11, fontWeight: '700', color: badge.text }}>
-                    {badge.label.toUpperCase()}
-                  </Text>
-                </View>
-              </View>
-              {customer.contact_person && (
-                <Text style={{ fontSize: 15, color: C.textTer, marginTop: 4 }}>
-                  {customer.contact_person}
-                </Text>
-              )}
+            <View>
+              <Text style={{ fontSize: 13, color: '#8E8E93', marginBottom: 4 }}>Telefon</Text>
+              <TextInput
+                value={editingField === 'phone' ? editValues.phone : customer.phone || '—'}
+                onChangeText={(text) => setEditValues({ ...editValues, phone: text })}
+                onFocus={() => setEditingField('phone')}
+                onBlur={() => saveField('phone', editValues.phone)}
+                keyboardType="phone-pad"
+                style={{ fontSize: 15, color: '#1A1A1A', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: editingField === 'phone' ? '#1A1A1A' : 'transparent' }}
+              />
+            </View>
+
+            <View>
+              <Text style={{ fontSize: 13, color: '#8E8E93', marginBottom: 4 }}>E-posta</Text>
+              <TextInput
+                value={editingField === 'email' ? editValues.email : customer.email || '—'}
+                onChangeText={(text) => setEditValues({ ...editValues, email: text })}
+                onFocus={() => setEditingField('email')}
+                onBlur={() => saveField('email', editValues.email)}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                style={{ fontSize: 15, color: '#1A1A1A', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: editingField === 'email' ? '#1A1A1A' : 'transparent' }}
+              />
             </View>
           </View>
-        </View>
 
-        {/* BÖLÜM 2 - İLETİŞİM */}
-        <View style={{ backgroundColor: C.surface, paddingTop: 20, paddingHorizontal: 20, marginBottom: 8 }}>
-          <Text style={{ fontSize: 12, fontWeight: '600', color: C.textTer, letterSpacing: 0.5, marginBottom: 12 }}>İLETİŞİM</Text>
+          {/* Tax Info */}
+          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16, gap: 12 }}>
+            <Text style={{ fontSize: 15, fontWeight: '600', color: '#1A1A1A', marginBottom: 4 }}>Vergi Bilgileri</Text>
 
-          {/* Telefon */}
-          <TouchableOpacity onPress={() => editField('phone', 'Telefon', customer.phone || '')}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                <Text style={{ fontSize: 15 }}>📞</Text>
-                <Text style={{ fontSize: 15, color: C.text }}>
-                  {customer.phone || 'Telefon ekle'}
-                </Text>
-              </View>
-              {customer.phone && (
-                <TouchableOpacity
-                  onPress={callPhone}
-                  style={{
-                    backgroundColor: '#1A1A1A',
-                    paddingHorizontal: 12,
-                    paddingVertical: 6,
-                    borderRadius: 6,
-                    marginRight: 8,
-                  }}
-                >
-                  <Text style={{ fontSize: 13, fontWeight: '600', color: '#FFFFFF' }}>Ara</Text>
-                </TouchableOpacity>
-              )}
+            <View>
+              <Text style={{ fontSize: 13, color: '#8E8E93', marginBottom: 4 }}>Vergi Dairesi</Text>
+              <TextInput
+                value={editingField === 'tax_office' ? editValues.tax_office : customer.tax_office || '—'}
+                onChangeText={(text) => setEditValues({ ...editValues, tax_office: text })}
+                onFocus={() => setEditingField('tax_office')}
+                onBlur={() => saveField('tax_office', editValues.tax_office)}
+                style={{ fontSize: 15, color: '#1A1A1A', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: editingField === 'tax_office' ? '#1A1A1A' : 'transparent' }}
+              />
             </View>
-          </TouchableOpacity>
-          <View style={{ height: 0.5, backgroundColor: C.border }} />
 
-          {/* E-posta */}
-          <TouchableOpacity onPress={() => editField('email', 'E-posta', customer.email || '')}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12 }}>
-              <Text style={{ fontSize: 15 }}>✉️</Text>
-              <Text style={{ fontSize: 15, color: C.text }}>
-                {customer.email || 'E-posta ekle'}
+            <View>
+              <Text style={{ fontSize: 13, color: '#8E8E93', marginBottom: 4 }}>Vergi Numarası</Text>
+              <TextInput
+                value={editingField === 'tax_number' ? editValues.tax_number : customer.tax_number || '—'}
+                onChangeText={(text) => setEditValues({ ...editValues, tax_number: text })}
+                onFocus={() => setEditingField('tax_number')}
+                onBlur={() => saveField('tax_number', editValues.tax_number)}
+                keyboardType="number-pad"
+                style={{ fontSize: 15, color: '#1A1A1A', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: editingField === 'tax_number' ? '#1A1A1A' : 'transparent' }}
+              />
+            </View>
+          </View>
+
+          {/* Addresses */}
+          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16, gap: 12 }}>
+            <Text style={{ fontSize: 15, fontWeight: '600', color: '#1A1A1A', marginBottom: 4 }}>Adresler</Text>
+
+            <View>
+              <Text style={{ fontSize: 13, color: '#8E8E93', marginBottom: 4 }}>Fatura Adresi</Text>
+              <TextInput
+                value={editingField === 'billing_address' ? editValues.billing_address : customer.billing_address || '—'}
+                onChangeText={(text) => setEditValues({ ...editValues, billing_address: text })}
+                onFocus={() => setEditingField('billing_address')}
+                onBlur={() => saveField('billing_address', editValues.billing_address)}
+                multiline
+                numberOfLines={3}
+                style={{ fontSize: 15, color: '#1A1A1A', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: editingField === 'billing_address' ? '#1A1A1A' : 'transparent' }}
+              />
+            </View>
+
+            <View>
+              <Text style={{ fontSize: 13, color: '#8E8E93', marginBottom: 4 }}>Sevk Adresi</Text>
+              <TextInput
+                value={editingField === 'shipping_address' ? editValues.shipping_address : customer.shipping_address || '—'}
+                onChangeText={(text) => setEditValues({ ...editValues, shipping_address: text })}
+                onFocus={() => setEditingField('shipping_address')}
+                onBlur={() => saveField('shipping_address', editValues.shipping_address)}
+                multiline
+                numberOfLines={3}
+                style={{ fontSize: 15, color: '#1A1A1A', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: editingField === 'shipping_address' ? '#1A1A1A' : 'transparent' }}
+              />
+            </View>
+          </View>
+
+          {/* Notes */}
+          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16, gap: 12 }}>
+            <Text style={{ fontSize: 15, fontWeight: '600', color: '#1A1A1A', marginBottom: 4 }}>Notlar</Text>
+            <TextInput
+              value={editingField === 'notes' ? editValues.notes : customer.notes || 'Not ekle...'}
+              onChangeText={(text) => setEditValues({ ...editValues, notes: text })}
+              onFocus={() => setEditingField('notes')}
+              onBlur={() => saveField('notes', editValues.notes)}
+              multiline
+              numberOfLines={4}
+              style={{ fontSize: 15, color: '#1A1A1A', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: editingField === 'notes' ? '#1A1A1A' : 'transparent' }}
+            />
+          </View>
+
+          {/* Logs */}
+          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16 }}>
+            <Text style={{ fontSize: 15, fontWeight: '600', color: '#1A1A1A', marginBottom: 12 }}>Sistem Logları</Text>
+            {logs.length === 0 ? (
+              <Text style={{ fontSize: 14, color: '#8E8E93', textAlign: 'center', paddingVertical: 20 }}>
+                Henüz log kaydı yok
               </Text>
-            </View>
-          </TouchableOpacity>
-          <View style={{ height: 0.5, backgroundColor: C.border }} />
-
-          {/* Adres */}
-          <TouchableOpacity onPress={() => editField('address', 'Adres', customer.address || '')}>
-            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingVertical: 12 }}>
-              <Text style={{ fontSize: 15 }}>📍</Text>
-              <Text style={{ fontSize: 15, color: C.text, flex: 1 }}>
-                {customer.address || 'Adres ekle'}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        </View>
-
-        {/* BÖLÜM 3 - FİRMA BİLGİLERİ */}
-        <View style={{ backgroundColor: C.surface, paddingTop: 20, paddingHorizontal: 20, marginBottom: 8 }}>
-          <Text style={{ fontSize: 12, fontWeight: '600', color: C.textTer, letterSpacing: 0.5, marginBottom: 12 }}>FİRMA BİLGİLERİ</Text>
-
-          <TouchableOpacity onPress={() => editField('sector', 'Sektör', customer.sector || '')}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12 }}>
-              <Text style={{ fontSize: 15, color: C.textSec }}>Sektör:</Text>
-              <Text style={{ fontSize: 15, fontWeight: '500', color: C.text }}>
-                {customer.sector || 'Belirtilmedi'}
-              </Text>
-            </View>
-          </TouchableOpacity>
-          <View style={{ height: 0.5, backgroundColor: C.border }} />
-
-          <TouchableOpacity onPress={() => editField('tax_number', 'Vergi No', customer.tax_number || '')}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12 }}>
-              <Text style={{ fontSize: 15, color: C.textSec }}>Vergi No:</Text>
-              <Text style={{ fontSize: 15, fontWeight: '500', color: C.text }}>
-                {customer.tax_number || '—'}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        </View>
-
-        {/* BÖLÜM 4 - GÖREVLER */}
-        <View style={{ backgroundColor: C.surface, paddingTop: 20, paddingHorizontal: 20, marginBottom: 8 }}>
-          <Text style={{ fontSize: 12, fontWeight: '600', color: C.textTer, letterSpacing: 0.5, marginBottom: 12 }}>
-            GÖREVLER ({tasks.length})
-          </Text>
-
-          {tasks.length === 0 ? (
-            <Text style={{ fontSize: 14, color: C.textTer, textAlign: 'center', paddingVertical: 16 }}>
-              Henüz görev bağlı değil
-            </Text>
-          ) : (
-            tasks.map((task, index) => (
-              <View key={task.id}>
-                {index > 0 && <View style={{ height: 0.5, backgroundColor: C.border, marginVertical: 8 }} />}
-                <TouchableOpacity
-                  style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8 }}
-                  onPress={() => router.push(`/task/${task.id}`)}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 15, color: C.text }} numberOfLines={1}>
-                      {task.title}
+            ) : (
+              logs.map((log) => (
+                <View key={log.id} style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#E5E5EA' }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#1A1A1A' }}>{log.action}</Text>
+                    <Text style={{ fontSize: 12, color: '#8E8E93' }}>
+                      {new Date(log.created_at).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                     </Text>
-                    {task.due_date && (
-                      <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>
-                        {new Date(task.due_date).toLocaleDateString('tr-TR')}
-                      </Text>
-                    )}
                   </View>
-                  <Text style={{ fontSize: 20, marginLeft: 10 }}>
-                    {getPriorityIcon(task.priority)}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            ))
-          )}
-        </View>
-
-        {/* BÖLÜM 5 - PAYDAŞLAR */}
-        <View style={{ backgroundColor: C.surface, paddingTop: 20, paddingHorizontal: 20, marginBottom: 8 }}>
-          <Text style={{ fontSize: 12, fontWeight: '600', color: C.textTer, letterSpacing: 0.5, marginBottom: 12 }}>
-            PAYDAŞLAR ({stakeholders.length})
-          </Text>
-
-          {stakeholders.length === 0 ? (
-            <Text style={{ fontSize: 14, color: C.textTer, textAlign: 'center', paddingVertical: 16 }}>
-              Henüz paydaş eklenmedi
-            </Text>
-          ) : (
-            stakeholders.map((stake, index) => (
-              <View key={stake.id}>
-                {index > 0 && <View style={{ height: 0.5, backgroundColor: C.border, marginVertical: 8 }} />}
-                <View style={{ paddingVertical: 8 }}>
-                  <Text style={{ fontSize: 15, color: C.text, fontWeight: '500' }}>
-                    {stake.name}
-                  </Text>
-                  <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>
-                    {stake.role_title || 'Rol belirtilmedi'}
-                  </Text>
+                  <Text style={{ fontSize: 13, color: '#3C3C43' }}>{log.user_name}</Text>
+                  {log.details && (
+                    <Text style={{ fontSize: 12, color: '#8E8E93', marginTop: 4 }} numberOfLines={2}>
+                      {JSON.stringify(log.details)}
+                    </Text>
+                  )}
                 </View>
-              </View>
-            ))
-          )}
-        </View>
+              ))
+            )}
+          </View>
+        </ScrollView>
+      ) : (
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: 16, gap: 12 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1A1A1A" />}
+        >
+          {/* Summary Cards */}
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <View style={{ flex: 1, backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16 }}>
+              <Text style={{ fontSize: 13, color: '#8E8E93', marginBottom: 4 }}>Alacak</Text>
+              <Text style={{ fontSize: 20, fontWeight: '700', color: '#1A1A1A' }}>
+                ₺{balance.totalDebit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
+              </Text>
+            </View>
 
-        {/* BÖLÜM 6 - NOTLAR */}
-        <View style={{ backgroundColor: C.surface, padding: 20, marginBottom: 8 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-            <Text style={{ fontSize: 12, fontWeight: '600', color: C.textTer, letterSpacing: 0.5 }}>NOTLAR</Text>
-            <TouchableOpacity onPress={addNote}>
-              <Ionicons name="add" size={22} color={C.text} />
-            </TouchableOpacity>
+            <View style={{ flex: 1, backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16 }}>
+              <Text style={{ fontSize: 13, color: '#8E8E93', marginBottom: 4 }}>Verecek</Text>
+              <Text style={{ fontSize: 20, fontWeight: '700', color: '#1A1A1A' }}>
+                ₺{balance.totalCredit.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
+              </Text>
+            </View>
           </View>
 
-          {notes.length === 0 ? (
-            <Text style={{ fontSize: 14, color: C.textTer, textAlign: 'center', paddingVertical: 16 }}>
-              Henüz not eklenmedi
+          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16 }}>
+            <Text style={{ fontSize: 13, color: '#8E8E93', marginBottom: 4 }}>Bakiye</Text>
+            <Text style={{ fontSize: 24, fontWeight: '700', color: balance.balance >= 0 ? '#1A1A1A' : '#1A1A1A' }}>
+              ₺{balance.balance.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
             </Text>
-          ) : (
-            notes.map((note, i) => (
-              <View key={note.id}>
-                {i > 0 && <View style={{ height: 0.5, backgroundColor: C.border, marginVertical: 12 }} />}
-                <Text style={{ fontSize: 15, color: C.text, lineHeight: 22 }}>{note.content}</Text>
-                <Text style={{ fontSize: 12, color: C.textTer, marginTop: 4 }}>
-                  {note.created_by} · {new Date(note.created_at).toLocaleDateString('tr-TR')}
-                </Text>
-              </View>
-            ))
-          )}
-        </View>
+          </View>
 
-        {/* BÖLÜM 7 - ARAÇLAR */}
-        <View style={{ backgroundColor: C.surface, paddingTop: 20, paddingHorizontal: 20, marginBottom: 8 }}>
-          <Text style={{ fontSize: 12, fontWeight: '600', color: C.textTer, letterSpacing: 0.5, marginBottom: 12 }}>ARAÇLAR</Text>
-
-          <TouchableOpacity
-            style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14 }}
-            onPress={() => Alert.alert('Yakında', 'AI Özet özelliği yakında eklenecek.')}
-          >
-            <Ionicons name="sparkles-outline" size={22} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 15, fontWeight: '500', color: C.text }}>AI Özet</Text>
-              <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>VOXI ile özetle</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
-          </TouchableOpacity>
-          <View style={{ height: 0.5, backgroundColor: C.border }} />
-
-          <TouchableOpacity
-            style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14 }}
-            onPress={() => Alert.alert('Yakında', 'Yıldızlı özelliği yakında eklenecek.')}
-          >
-            <Ionicons name="star-outline" size={22} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 15, fontWeight: '500', color: C.text }}>Yıldızla</Text>
-              <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>Önemli müşteriler</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
-          </TouchableOpacity>
-          <View style={{ height: 0.5, backgroundColor: C.border }} />
-
-          <TouchableOpacity
-            style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14 }}
-            onPress={() => Alert.alert('Yakında', 'Hatırlatma özelliği yakında eklenecek.')}
-          >
-            <Ionicons name="alarm-outline" size={22} color={C.iconColor} style={{ marginRight: 12, width: 24 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 15, fontWeight: '500', color: C.text }}>Hatırlatma Kur</Text>
-              <Text style={{ fontSize: 13, color: C.textTer, marginTop: 2 }}>Bildirim ayarla</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
-          </TouchableOpacity>
-        </View>
-
-        {/* BÖLÜM 8 - TEHLİKELİ ALAN */}
-        <View style={{ marginTop: 32, alignItems: 'center' }}>
-          <TouchableOpacity onPress={deleteCustomer}>
-            <Text style={{ fontSize: 15, fontWeight: '600', color: '#FF3B30' }}>Müşteriyi Sil</Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+          {/* Transactions */}
+          <View style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16 }}>
+            <Text style={{ fontSize: 15, fontWeight: '600', color: '#1A1A1A', marginBottom: 12 }}>İşlemler</Text>
+            {transactions.length === 0 ? (
+              <Text style={{ fontSize: 14, color: '#8E8E93', textAlign: 'center', paddingVertical: 20 }}>
+                Henüz işlem kaydı yok
+              </Text>
+            ) : (
+              transactions.map((transaction) => (
+                <View key={transaction.id} style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#E5E5EA', flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: '#1A1A1A', marginBottom: 2 }}>
+                      {transaction.description}
+                    </Text>
+                    <Text style={{ fontSize: 12, color: '#8E8E93' }}>
+                      {new Date(transaction.transaction_date).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: transaction.transaction_type === 'debit' ? '#1A1A1A' : '#1A1A1A' }}>
+                    {transaction.transaction_type === 'debit' ? '+' : '-'}₺{transaction.amount.toLocaleString('tr-TR', { minimumFractionDigits: 2 })}
+                  </Text>
+                </View>
+              ))
+            )}
+          </View>
+        </ScrollView>
+      )}
+    </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F5F3EF' },
-  loadingText: { fontSize: 15, color: '#8E8E93', textAlign: 'center', marginTop: 16 },
-});

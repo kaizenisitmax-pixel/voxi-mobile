@@ -51,13 +51,14 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
   try {
     const projectId = Constants.expoConfig?.extra?.eas?.projectId;
     if (!projectId) {
-      console.warn('EAS projectId bulunamadı, push token alınamaz');
+      // Expo Go'da veya development'ta projectId olmayabilir - sessizce devam et
       return null;
     }
     const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
     return tokenData.data;
   } catch (error) {
-    console.error('Push token alınamadı:', error);
+    // Expo Go'da push notification çalışmaz, development build gerekir
+    // Hatayı susturuyoruz çünkü bu normal bir durum
     return null;
   }
 }
