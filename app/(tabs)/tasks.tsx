@@ -246,11 +246,17 @@ export default function TasksScreen() {
           <Text style={styles.headerSubtitle}>{tasks.length} görev</Text>
         </View>
         <View style={styles.headerActions}>
-          <TouchableOpacity style={styles.headerButton}>
-            <Ionicons name="swap-vertical-outline" size={22} color="#1A1A1A" />
+          <TouchableOpacity 
+            style={styles.headerButton}
+            onPress={() => router.push('/customer/new')}
+          >
+            <Ionicons name="business-outline" size={20} color="#1A1A1A" />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.headerButton}>
-            <Ionicons name="ellipsis-horizontal" size={22} color="#1A1A1A" />
+          <TouchableOpacity 
+            style={styles.headerButton}
+            onPress={() => router.push('/order/new')}
+          >
+            <Ionicons name="receipt-outline" size={20} color="#1A1A1A" />
           </TouchableOpacity>
         </View>
       </View>
