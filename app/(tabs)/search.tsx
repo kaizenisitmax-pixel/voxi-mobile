@@ -248,7 +248,7 @@ export default function ProfileScreen() {
           <TouchableOpacity
             style={styles.menuItem}
             onPress={() => {
-              Alert.alert('evim.ai', 'Versiyon: 1.0.0\n\nAI ile oda tasarımı ve usta bulma platformu');
+              Alert.alert('VOXI', 'Versiyon: 1.0.0\n\nHayal Et · Gör · Yaptır\nAI ile tasarım ve usta bulma platformu');
             }}
           >
             <Ionicons name="information-circle-outline" size={24} color="#212121" />

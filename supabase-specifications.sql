@@ -1,5 +1,5 @@
 -- =====================================================
--- EvimAI Adım 2: Şartname Sistemi - SQL Migration
+-- VOXI Adım 2: Şartname Sistemi - SQL Migration
 -- Tarih: 13 Şubat 2026
 -- Supabase SQL Editor'da çalıştırın
 -- =====================================================

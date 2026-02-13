@@ -1,5 +1,5 @@
 /**
- * EvimAI - Specification Service
+ * VOXI - Specification Service
  * Şartname CRUD + Edge Function çağrıları
  */
 

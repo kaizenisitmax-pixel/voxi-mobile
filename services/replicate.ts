@@ -1,5 +1,5 @@
 /**
- * EvimAI - Enhanced Replicate Service
+ * VOXI - Enhanced Replicate Service
  * Kategori-ozel model secimi ve optimizasyonu
  * FormData upload (React Native uyumlu)
  */

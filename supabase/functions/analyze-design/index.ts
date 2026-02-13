@@ -1,5 +1,5 @@
 // supabase/functions/analyze-design/index.ts
-// EvimAI - Claude Vision ile Tasarım Analizi
+// VOXI - Claude Vision ile Tasarım Analizi
 // Görselden malzeme, ölçü, finish çıkarır
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'

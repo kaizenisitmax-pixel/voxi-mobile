@@ -1,5 +1,5 @@
 /**
- * EvimAI - Replicate Model Mapping Configuration
+ * VOXI - Replicate Model Mapping Configuration
  * Kategori, Alt Kategori ve Stil bazinda optimize edilmis model secimi
  */
 

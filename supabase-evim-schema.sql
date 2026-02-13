@@ -1,4 +1,4 @@
--- EvimAI + VOXI Integration Schema
+-- VOXI Integration Schema
 -- Oda tasarım + usta bulma platform tabloları
 
 -- ============================================
@@ -41,7 +41,7 @@ FOR EACH ROW
 EXECUTE FUNCTION update_masters_updated_at();
 
 -- ============================================
--- 2. TASARIMLAR (Designs - EvimAI)
+-- 2. TASARIMLAR (Designs - VOXI)
 -- ============================================
 CREATE TABLE IF NOT EXISTS designs (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -448,7 +448,7 @@ $$ LANGUAGE plpgsql;
 -- Başarı mesajı
 DO $$
 BEGIN
-  RAISE NOTICE 'EvimAI schema migration tamamlandı!';
+  RAISE NOTICE 'VOXI schema migration tamamlandı!';
   RAISE NOTICE 'Oluşturulan tablolar: masters, designs, job_requests, chats, chat_messages, reviews';
   RAISE NOTICE 'RLS policies aktif edildi.';
 END $$;

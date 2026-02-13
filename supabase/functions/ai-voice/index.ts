@@ -35,10 +35,10 @@ serve(async (req: Request) => {
     }
 
     // ========================================
-    // MASTER REGISTER MODE (EvimAI)
+    // MASTER REGISTER MODE (VOXI)
     // ========================================
     if (context === 'master_register') {
-      const masterRegisterPrompt = `Sen bir usta-müşteri eşleştirme asistanısın (EvimAI platformu). 
+      const masterRegisterPrompt = `Sen bir usta-müşteri eşleştirme asistanısın (VOXI platformu). 
 Kullanıcı sesli komutla usta olarak kaydolmak istiyor.
 
 GÖREV:

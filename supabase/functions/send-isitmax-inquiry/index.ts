@@ -1,5 +1,5 @@
 // supabase/functions/send-isitmax-inquiry/index.ts
-// EvimAI - Yapı Kategorisi: ISITMAX'a İletişim Formu
+// VOXI - Yapı Kategorisi: ISITMAX'a İletişim Formu
 // Supabase'e kayıt + email bildirimi
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
@@ -141,7 +141,7 @@ serve(async (req: Request) => {
         const emailHtml = `
           <div style="font-family:Arial,sans-serif; max-width:600px; margin:0 auto;">
             <div style="background:#1E293B; color:white; padding:24px; text-align:center;">
-              <h1 style="margin:0; font-size:24px;">EvimAI - Yeni Yapı Talebi</h1>
+              <h1 style="margin:0; font-size:24px;">VOXI - Yeni Yapı Talebi</h1>
               <p style="margin:8px 0 0; opacity:0.8;">Hayal Et · Gör · Yaptır</p>
             </div>
             
@@ -179,7 +179,7 @@ serve(async (req: Request) => {
             </div>
 
             <div style="background:#F1F5F9; padding:16px; text-align:center; color:#64748B; font-size:12px;">
-              <p>Bu talep EvimAI uygulaması üzerinden otomatik oluşturulmuştur.</p>
+              <p>Bu talep VOXI uygulaması üzerinden otomatik oluşturulmuştur.</p>
               <p>Talep ID: ${inquiry.id}</p>
             </div>
           </div>
@@ -192,10 +192,10 @@ serve(async (req: Request) => {
             'Authorization': `Bearer ${RESEND_API_KEY}`,
           },
           body: JSON.stringify({
-            from: 'EvimAI <noreply@evim.ai>',
+            from: 'VOXI <noreply@voxi.app>',
             to: [ISITMAX_EMAIL],
             cc: ISITMAX_CC ? [ISITMAX_CC] : [],
-            subject: `[EvimAI] Yeni Yapı Talebi - ${contact_name} - ${spec.style || spec.category}`,
+            subject: `[VOXI] Yeni Yapı Talebi - ${contact_name} - ${spec.style || spec.category}`,
             html: emailHtml,
           }),
         })

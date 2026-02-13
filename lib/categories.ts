@@ -1,4 +1,4 @@
-// EvimAI Kategoriler, Hizmet Tipleri ve Stiller
+// VOXI Kategoriler, Hizmet Tipleri ve Stiller
 // Hiyerarşi: Kategori → Hizmet Tipi → Stil → Fotoğraf → AI Tasarım
 
 // ==========================================

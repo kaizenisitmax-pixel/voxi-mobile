@@ -1,4 +1,4 @@
--- EvimAI Migration Kontrol
+-- VOXI Migration Kontrol
 -- Bu sorguları Supabase Dashboard > SQL Editor'da çalıştırın
 
 -- ============================================

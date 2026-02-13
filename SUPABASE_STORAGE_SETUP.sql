@@ -1,4 +1,4 @@
--- EvimAI Storage Bucket Setup
+-- VOXI Storage Bucket Setup
 -- Bu SQL kodunu Supabase Dashboard > SQL Editor'da çalıştırın
 
 -- ============================================

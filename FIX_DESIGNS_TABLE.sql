@@ -1,4 +1,4 @@
--- EvimAI Designs Tablosu Eksik Kolon Düzeltmesi
+-- VOXI Designs Tablosu Eksik Kolon Düzeltmesi
 -- Bu SQL kodunu Supabase Dashboard > SQL Editor'da çalıştırın
 
 -- ============================================

@@ -193,7 +193,7 @@ export default function DesignScreen() {
         {/* Header */}
         <View style={styles.header}>
           <View>
-            <Text style={styles.logo}>evim.ai</Text>
+            <Text style={styles.logo}>VOXI</Text>
             <Text style={styles.tagline}>Hayal Et  ·  Gör  ·  Yaptır</Text>
           </View>
           <TouchableOpacity

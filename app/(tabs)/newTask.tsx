@@ -67,7 +67,7 @@ export default function NewTaskScreen() {
 
   async function loadQuickMessages() {
     try {
-      const stored = await AsyncStorage.getItem('kalfa_quick_messages');
+      const stored = await AsyncStorage.getItem('voxi_quick_messages');
       if (stored) setQuickMessages(JSON.parse(stored));
     } catch (e) {
       console.error(e);

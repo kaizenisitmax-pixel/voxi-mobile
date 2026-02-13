@@ -19,7 +19,7 @@ export async function shareDesign(imageUrl: string, style: string): Promise<void
     }
 
     // Download image to local
-    const filename = `evim-ai-${Date.now()}.jpg`;
+    const filename = `voxi-${Date.now()}.jpg`;
     const localUri = `${FileSystem.cacheDirectory}${filename}`;
 
     const downloadResult = await FileSystem.downloadAsync(imageUrl, localUri);
@@ -33,7 +33,7 @@ export async function shareDesign(imageUrl: string, style: string): Promise<void
     // Share
     await Sharing.shareAsync(downloadResult.uri, {
       mimeType: 'image/jpeg',
-      dialogTitle: `evim.ai - ${style} Tasarım`,
+      dialogTitle: `VOXI - ${style} Tasarım`,
       UTI: 'public.jpeg',
     });
 

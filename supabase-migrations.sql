@@ -1,4 +1,4 @@
--- KALFA/Voxi - WhatsApp Tarzı İletişim Özellikleri
+-- VOXI - WhatsApp Tarzı İletişim Özellikleri
 -- Bu SQL'leri Supabase Dashboard'da çalıştırın
 
 -- 1. Mesaj durumu (okundu bilgisi)
