@@ -88,6 +88,7 @@ function RootNavigator() {
       <Stack.Screen name="(onboarding)" />
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="task" />
+      <Stack.Screen name="specification" />
     </Stack>
   );
 }

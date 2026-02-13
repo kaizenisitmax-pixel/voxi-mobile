@@ -303,6 +303,58 @@ export function getStyleInfo(serviceType: ServiceType, category: Category, style
 }
 
 // ==========================================
+// CATEGORY CONFIG (Usta vs Doğrudan İletişim)
+// ==========================================
+
+export interface CategoryConfig {
+  requiresMasterMatching: boolean;
+  showSpecification: boolean;
+  directContact?: boolean;
+  contactLabel?: string;
+  contactTarget?: string; // 'isitmax' | 'master'
+}
+
+export const CATEGORY_CONFIG: Record<string, CategoryConfig> = {
+  decoration: {
+    requiresMasterMatching: true,
+    showSpecification: true,
+    contactTarget: 'master',
+  },
+  construction: {
+    requiresMasterMatching: false,
+    showSpecification: true,
+    directContact: true,
+    contactLabel: 'ISITMAX ile İletişime Geç',
+    contactTarget: 'isitmax',
+  },
+  hvac: {
+    requiresMasterMatching: true,
+    showSpecification: true,
+    contactTarget: 'master',
+  },
+};
+
+/**
+ * ServiceType'ı specification category'ye dönüştür
+ * dekorasyon → decoration, yapi → construction, iklimlendirme → hvac
+ */
+export function serviceTypeToSpecCategory(serviceType: ServiceType): string {
+  const map: Record<ServiceType, string> = {
+    dekorasyon: 'decoration',
+    yapi: 'construction',
+    iklimlendirme: 'hvac',
+  };
+  return map[serviceType] || 'decoration';
+}
+
+/**
+ * Kategori config'ini al
+ */
+export function getCategoryConfig(specCategory: string): CategoryConfig {
+  return CATEGORY_CONFIG[specCategory] || CATEGORY_CONFIG.decoration;
+}
+
+// ==========================================
 // PRICE ESTIMATION (Anahtar Teslim Fiyat)
 // ==========================================
 

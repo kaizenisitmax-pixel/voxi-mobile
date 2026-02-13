@@ -17,12 +17,20 @@ import * as Haptics from 'expo-haptics';
 import { supabase } from '../../lib/supabase';
 import BeforeAfter from '../../components/design/BeforeAfter';
 import PriceQuoteModal from '../../components/design/PriceQuoteModal';
+import SpecSummary from '../../components/spec/SpecSummary';
+import AIAnalysisLoader from '../../components/spec/AIAnalysisLoader';
 import { shareDesign } from '../../services/share';
+import {
+  analyzeDesign,
+  getDesignSpecification,
+} from '../../services/specification';
 import {
   Category,
   ServiceType,
   getEstimatedPrice,
   PriceEstimate,
+  serviceTypeToSpecCategory,
+  getCategoryConfig,
 } from '../../lib/categories';
 
 interface Design {
@@ -48,10 +56,18 @@ export default function DesignDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [showBeforeAfter, setShowBeforeAfter] = useState(false);
   const [showPriceQuote, setShowPriceQuote] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [specInfo, setSpecInfo] = useState<{
+    has_specification: boolean;
+    specification_id?: string;
+    status?: string;
+    item_count?: number;
+  } | null>(null);
 
   useEffect(() => {
     loadDesign();
     incrementViewCount();
+    checkSpecification();
   }, [id]);
 
   const loadDesign = async () => {
@@ -78,6 +94,62 @@ export default function DesignDetailScreen() {
       await supabase.rpc('increment_design_views', { design_id: id });
     } catch (error) {
       console.error('❌ View count güncellenemedi:', error);
+    }
+  };
+
+  const checkSpecification = async () => {
+    if (!id) return;
+    try {
+      const result = await getDesignSpecification(id as string);
+      setSpecInfo(result);
+    } catch (error) {
+      console.error('❌ Şartname kontrol hatası:', error);
+    }
+  };
+
+  const handleCreateSpec = async () => {
+    if (!design) return;
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setAnalyzing(true);
+
+    try {
+      const specCategory = design.service_type
+        ? serviceTypeToSpecCategory(design.service_type as ServiceType)
+        : 'decoration';
+
+      const result = await analyzeDesign({
+        design_id: design.id,
+        image_url: design.ai_image_url,
+        category: specCategory,
+        style: design.style || '',
+      });
+
+      setSpecInfo({
+        has_specification: true,
+        specification_id: result.specification_id,
+        status: 'draft',
+        item_count: result.item_count,
+      });
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      Alert.alert(
+        'Şartname Oluşturuldu',
+        `${result.item_count} kalem tespit edildi. ${result.summary || 'Şartnameyi inceleyip düzenleyebilirsiniz.'}`,
+        [
+          {
+            text: 'Şartnameyi Gör',
+            onPress: () => router.push(`/specification/${result.specification_id}`),
+          },
+          { text: 'Tamam' },
+        ]
+      );
+    } catch (error: any) {
+      console.error('❌ Şartname oluşturma hatası:', error);
+      Alert.alert('Hata', error.message || 'Şartname oluşturulamadı. Lütfen tekrar deneyin.');
+    } finally {
+      setAnalyzing(false);
     }
   };
 
@@ -278,6 +350,43 @@ export default function DesignDetailScreen() {
             <Ionicons name="share-outline" size={20} color="#212121" />
             <Text style={styles.actionButtonTextSecondary}>Paylaş</Text>
           </TouchableOpacity>
+        </View>
+
+        {/* Şartname Section */}
+        <View style={styles.specSection}>
+          {analyzing ? (
+            <AIAnalysisLoader
+              category={design.category}
+              style={design.style}
+            />
+          ) : specInfo?.has_specification ? (
+            <SpecSummary
+              specId={specInfo.specification_id!}
+              status={specInfo.status || 'draft'}
+              itemCount={specInfo.item_count || 0}
+              title={`${design.style || design.category} Şartnamesi`}
+              onPress={() => router.push(`/specification/${specInfo.specification_id}`)}
+            />
+          ) : (
+            <TouchableOpacity
+              style={styles.specButton}
+              onPress={handleCreateSpec}
+              activeOpacity={0.8}
+            >
+              <View style={styles.specButtonContent}>
+                <View style={styles.specButtonLeft}>
+                  <View style={styles.specIconContainer}>
+                    <Ionicons name="document-text-outline" size={24} color="#FFFFFF" />
+                  </View>
+                  <View>
+                    <Text style={styles.specButtonTitle}>Şartname Oluştur</Text>
+                    <Text style={styles.specButtonSubtitle}>AI ile malzeme ve ölçü listesi çıkar</Text>
+                  </View>
+                </View>
+                <Ionicons name="sparkles" size={20} color="#212121" />
+              </View>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Anahtar Teslim Fiyat Button */}
@@ -508,6 +617,49 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#212121',
+  },
+  // Spec Section
+  specSection: {
+    paddingHorizontal: 16,
+    marginBottom: 16,
+  },
+  specButton: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#212121',
+    borderStyle: 'dashed',
+    overflow: 'hidden',
+  },
+  specButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+  },
+  specButtonLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  specIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#212121',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  specButtonTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1A1A1A',
+  },
+  specButtonSubtitle: {
+    fontSize: 12,
+    color: '#8E8E93',
+    marginTop: 2,
   },
   // Price Section
   priceSection: {
