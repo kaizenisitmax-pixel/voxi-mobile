@@ -1,3 +1,5 @@
+// @ts-nocheck
+// Supabase Edge Function: send-push
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 

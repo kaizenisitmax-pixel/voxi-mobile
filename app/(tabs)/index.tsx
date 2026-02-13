@@ -1,484 +1,417 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   ScrollView,
-  Animated,
   StyleSheet,
-  StatusBar,
-  ActivityIndicator,
+  Image,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio } from 'expo-av';
 import { router } from 'expo-router';
-import { useFocusEffect } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../../lib/supabase';
-import { speakText } from '../../utils/audio';
-import { startRecording, stopRecording, transcribeAudio } from '../../utils/recording';
-import { processCommand } from '../../lib/ai';
+import { createAIDesign } from '../../services/replicate';
+import CategorySelector from '../../components/design/CategorySelector';
+import ServiceTypeSelector from '../../components/design/ServiceTypeSelector';
+import StylePicker from '../../components/design/StylePicker';
+import ToolSelector from '../../components/design/ToolSelector';
+import {
+  Category,
+  ServiceType,
+  ToolId,
+  getToolsByCategory,
+  getToolInfo,
+  getPhotoHint,
+} from '../../lib/categories';
 import { useAuth } from '../../contexts/AuthContext';
-import * as Haptics from 'expo-haptics';
 
-interface Task {
-  id: string;
-  title: string;
-  status: string;
-  priority: 'urgent' | 'normal' | 'low';
-  assigned_to: string;
-  created_at: string;
-  updated_at: string;
-  workspace_id: string;
-  profiles?: {
-    full_name: string;
-  };
-}
+export default function DesignScreen() {
+  const { session } = useAuth();
 
-export default function HomeScreen() {
-  const { session, profile } = useAuth();
-  const workspaceId = session?.user?.user_metadata?.active_workspace_id;
-  const userName = profile?.full_name?.split(' ')[0] || 'Kullanıcı';
-
-  // Voice recording
-  const [isRecording, setIsRecording] = useState(false);
+  // Design state - HIERARCHY: Category → ServiceType → Style → Photo → Tool
+  const [selectedCategory, setSelectedCategory] = useState<Category>('ev');
+  const [selectedServiceType, setSelectedServiceType] = useState<ServiceType>('dekorasyon');
+  const [selectedStyle, setSelectedStyle] = useState<string | null>(null);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedTool, setSelectedTool] = useState<ToolId | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [statusText, setStatusText] = useState('');
-  const recordingRef = useRef<any>(null);
+  const [recentDesigns, setRecentDesigns] = useState<any[]>([]);
 
-  // Recent tasks & created task
-  const [recentTasks, setRecentTasks] = useState<Task[]>([]);
-  const [createdTask, setCreatedTask] = useState<Task | null>(null);
+  // Derived data
+  const availableTools = getToolsByCategory(selectedCategory);
+  const currentTool = selectedTool ? getToolInfo(selectedTool) : null;
+  const photoHint = getPhotoHint(selectedCategory, selectedServiceType, selectedStyle || undefined);
 
-  // Animations
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const waveAnim = useRef(new Animated.Value(0)).current;
+  // Step tracking for visual feedback
+  const currentStep = !selectedStyle ? 2 : !selectedImage ? 3 : !selectedTool ? 4 : 5;
 
-  // Get greeting based on time
-  const getGreeting = () => {
-    const hour = new Date().getHours();
-    if (hour < 12) return `Günaydın ${userName}`;
-    if (hour < 18) return `İyi günler ${userName}`;
-    return `İyi akşamlar ${userName}`;
-  };
+  // Load recent designs
+  useEffect(() => {
+    loadRecentDesigns();
+  }, []);
 
-  // Fetch recent tasks
-  const fetchRecentTasks = async () => {
-    if (!workspaceId) return;
-
+  const loadRecentDesigns = async () => {
+    if (!session?.user?.id) return;
     try {
       const { data, error } = await supabase
-        .from('tasks')
-        .select('*, profiles:assigned_to(full_name)')
-        .eq('workspace_id', workspaceId)
-        .order('updated_at', { ascending: false })
-        .limit(3);
-
+        .from('designs')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: false })
+        .limit(5);
       if (error) throw error;
-      setRecentTasks(data || []);
+      setRecentDesigns(data || []);
     } catch (error) {
-      console.error('❌ Son görevler fetch hatası:', error);
+      console.error('❌ Son tasarımlar yüklenemedi:', error);
     }
   };
 
-  // Load recent tasks
-  useEffect(() => {
-    fetchRecentTasks();
-  }, [workspaceId]);
-
-  // Refresh on focus
-  useFocusEffect(
-    useCallback(() => {
-      fetchRecentTasks();
-    }, [workspaceId])
-  );
-
-
-  // Pulse animation for halo
-  useEffect(() => {
-    if (isRecording) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 1.15,
-            duration: 800,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 1,
-            duration: 800,
-            useNativeDriver: true,
-          }),
-        ])
-      ).start();
-    } else {
-      pulseAnim.setValue(1);
-    }
-  }, [isRecording]);
-
-  // Wave animation for speaking
-  useEffect(() => {
-    if (isSpeaking) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(waveAnim, {
-            toValue: 1,
-            duration: 500,
-            useNativeDriver: true,
-          }),
-          Animated.timing(waveAnim, {
-            toValue: 0,
-            duration: 500,
-            useNativeDriver: true,
-          }),
-        ])
-      ).start();
-    } else {
-      waveAnim.setValue(0);
-    }
-  }, [isSpeaking]);
-
-  // Start recording
-  const handlePressIn = async () => {
+  // Pick image from camera
+  const handleTakePhoto = async () => {
     try {
-      console.log('🎤 Kayıt başlıyor');
-      setIsRecording(true);
-      setStatusText('Dinliyorum...');
-      setCreatedTask(null);
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-
-      const recording = await startRecording();
-      recordingRef.current = recording;
-      console.log('🎤 Kayıt başladı');
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('İzin Gerekli', 'Kamerayı kullanmak için izin vermelisiniz');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [16, 9],
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets[0]) {
+        setSelectedImage(result.assets[0].uri);
+      }
     } catch (error) {
-      console.error('❌ Kayıt başlatma hatası:', error);
-      setIsRecording(false);
-      setStatusText('');
-      Alert.alert('Hata', 'Ses kaydı başlatılamadı');
+      console.error('❌ Fotoğraf çekilemedi:', error);
+      Alert.alert('Hata', 'Fotoğraf çekilirken bir sorun oluştu');
     }
   };
 
-  // Stop recording and process
-  const handlePressOut = async () => {
+  // Pick image from library
+  const handlePickImage = async () => {
     try {
-      if (!recordingRef.current) {
-        setIsRecording(false);
-        setStatusText('');
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('İzin Gerekli', 'Galeriye erişmek için izin vermelisiniz');
         return;
       }
-
-      console.log('🎤 Kayıt durduruluyor');
-      setIsRecording(false);
-      setIsProcessing(true);
-      setStatusText('Düşünüyorum...');
-
-      const result = await stopRecording(recordingRef.current);
-      recordingRef.current = null;
-
-      if (!result?.uri) {
-        setStatusText('');
-        setIsProcessing(false);
-        return;
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [16, 9],
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets[0]) {
+        setSelectedImage(result.assets[0].uri);
       }
+    } catch (error) {
+      console.error('❌ Fotoğraf seçilemedi:', error);
+      Alert.alert('Hata', 'Fotoğraf seçilirken bir sorun oluştu');
+    }
+  };
 
-      // Transcribe audio
-      const transcript = await transcribeAudio(result.uri);
-      
-      if (!transcript) {
-        setStatusText('');
-        setIsProcessing(false);
-        return;
-      }
+  // Start AI design
+  const handleStartDesign = async () => {
+    if (!selectedTool) {
+      Alert.alert('Araç Gerekli', 'Lütfen bir araç seçin');
+      return;
+    }
+    if (!session?.user?.id) {
+      Alert.alert('Hata', 'Oturum bulunamadı');
+      return;
+    }
 
-      console.log('📝 Transcript:', transcript);
-
-      // AI analysis via Edge Function
-      const { data: functionData, error: functionError } = await supabase.functions.invoke('ai-voice', {
-        body: { 
-          transcript,
-          workspace_id: workspaceId,
-        }
+    setIsProcessing(true);
+    try {
+      const result = await createAIDesign({
+        imageUri: selectedImage!,
+        category: selectedCategory,
+        style: selectedStyle || 'modern',
+        tool: selectedTool,
+        serviceType: selectedServiceType,
+        userId: session.user.id,
       });
 
-      if (functionError || !functionData) {
-        console.error('❌ AI analiz hatası:', functionError);
-        setStatusText('');
-        setIsProcessing(false);
-        Alert.alert('Hata', 'AI analizi başarısız');
-        return;
-      }
+      console.log('✅ Tasarım tamamlandı:', result.id);
+      await loadRecentDesigns();
 
-      const aiResult = functionData;
-      console.log('🧠 AI sonuç:', JSON.stringify(aiResult));
+      Alert.alert(
+        'Tasarım Hazır!',
+        'AI tasarımınız başarıyla oluşturuldu',
+        [
+          { text: 'Tamam', style: 'default' },
+          {
+            text: 'Detayları Gör',
+            style: 'default',
+            onPress: () => router.push(`/design/${result.id}`),
+          },
+        ]
+      );
 
-      // Create task if action is create_task
-      if (aiResult.action === 'create_task' && aiResult.data) {
-        const taskData: any = {
-          title: aiResult.data.title,
-          workspace_id: workspaceId,
-          created_by: session?.user?.id,
-          status: 'open',
-          priority: aiResult.data.priority || 'normal',
-        };
-
-        if (aiResult.data.assigned_to) {
-          taskData.assigned_to = aiResult.data.assigned_to;
-        }
-        if (aiResult.data.due_date) {
-          taskData.due_date = aiResult.data.due_date;
-        }
-
-        const { data: newTask, error } = await supabase
-          .from('tasks')
-          .insert(taskData)
-          .select('*, profiles:assigned_to(full_name)')
-          .single();
-
-        if (error) {
-          console.error('❌ Görev oluşturma hatası:', error);
-          setStatusText('');
-          setIsProcessing(false);
-          Alert.alert('Hata', 'Görev oluşturulamadı');
-          return;
-        }
-
-        console.log('✅ Görev oluşturuldu:', newTask);
-        setCreatedTask(newTask);
-        await fetchRecentTasks();
-        
-        // TTS response
-        const response = aiResult.response || 'Tamam';
-        console.log('🔊 TTS:', response);
-        setStatusText('');
-        setIsSpeaking(true);
-        setIsProcessing(false);
-
-        await speakText(response);
-
-        setIsSpeaking(false);
-        setStatusText('');
-        
-        // Show created task for 5 seconds then open detail
-        setTimeout(() => {
-          router.push(`/task/${newTask.id}`);
-          setCreatedTask(null);
-        }, 5000);
-        
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      } else {
-        // No task created, just give response
-        const response = aiResult.response || 'Tamam';
-        console.log('🔊 TTS:', response);
-        setStatusText('');
-        setIsSpeaking(true);
-        setIsProcessing(false);
-
-        await speakText(response);
-
-        setIsSpeaking(false);
-        setStatusText('');
-        
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      }
-    } catch (error) {
-      console.error('❌ İşleme hatası:', error);
-      setIsRecording(false);
+      setSelectedImage(null);
+      setSelectedTool(null);
+    } catch (error: any) {
+      console.error('❌ Tasarım hatası:', error);
+      Alert.alert(
+        'Tasarım Başarısız',
+        error.message || 'Tasarım oluşturulurken bir sorun oluştu.'
+      );
+    } finally {
       setIsProcessing(false);
-      setIsSpeaking(false);
-      setStatusText('');
-      setCreatedTask(null);
-      Alert.alert('Hata', 'Bir sorun oluştu');
     }
   };
 
-  // Cancel TTS
-  const handleCancelTTS = async () => {
-    try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-      });
-      setIsSpeaking(false);
-      setStatusText('');
-      
-      // Open task if exists
-      if (createdTask) {
-        router.push(`/task/${createdTask.id}`);
-      }
-    } catch (error) {
-      console.error('❌ TTS iptal hatası:', error);
-    }
+  // Reset selections
+  const handleCategoryChange = (category: Category) => {
+    setSelectedCategory(category);
+    setSelectedStyle(null);
+    setSelectedTool(null);
+    setSelectedImage(null);
   };
 
-  // Format relative time
-  const formatRelativeTime = (dateString: string) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-
-    if (diffMins < 1) return 'Az önce';
-    if (diffMins < 60) return `${diffMins} dk önce`;
-    if (diffHours < 24) return `${diffHours} saat önce`;
-    return date.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' });
+  const handleServiceTypeChange = (serviceType: ServiceType) => {
+    setSelectedServiceType(serviceType);
+    setSelectedStyle(null);
+    setSelectedTool(null);
   };
 
+  const canStartDesign = selectedImage && selectedTool && selectedStyle && !isProcessing;
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#F5F3EF" />
-
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.logo}>VOXI</Text>
-        <TouchableOpacity onPress={() => router.push('/(tabs)/settings')}>
-          <Ionicons name="settings-outline" size={24} color="#1A1A1A" />
-        </TouchableOpacity>
-      </View>
-
-      {/* Main Content */}
-      <View style={styles.content}>
-        {/* Greeting Message */}
-        {!statusText && !createdTask && (
-          <Text style={styles.greeting}>{getGreeting()}</Text>
-        )}
-
-        {/* Status Text (during recording/processing) */}
-        {statusText && (
-          <Text style={styles.statusText}>{statusText}</Text>
-        )}
-
-        {/* Microphone Section */}
-        <View style={styles.micContainer}>
-          {/* Giant Halos (cover entire screen) */}
-          <Animated.View
-            style={[
-              styles.halo,
-              styles.halo1,
-              {
-                transform: [{ scale: isRecording ? pulseAnim : 1 }],
-              },
-            ]}
-          />
-          <Animated.View
-            style={[
-              styles.halo,
-              styles.halo2,
-              {
-                transform: [{ scale: isRecording ? pulseAnim : 1 }],
-              },
-            ]}
-          />
-          <Animated.View
-            style={[
-              styles.halo,
-              styles.halo3,
-              {
-                transform: [{ scale: isRecording ? pulseAnim : 1 }],
-              },
-            ]}
-          />
-          <Animated.View
-            style={[
-              styles.halo,
-              styles.halo4,
-              {
-                transform: [{ scale: isRecording ? pulseAnim : 1 }],
-              },
-            ]}
-          />
-
-          {/* Giant Microphone Button */}
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.logo}>evim.ai</Text>
+            <Text style={styles.tagline}>Hayal Et  ·  Gör  ·  Yaptır</Text>
+          </View>
           <TouchableOpacity
-            onPressIn={handlePressIn}
-            onPressOut={handlePressOut}
-            disabled={isProcessing || isSpeaking}
-            style={[styles.micButton, (isProcessing || isSpeaking) && styles.micButtonDisabled]}
+            style={styles.notificationButton}
+            onPress={() => Alert.alert('Bildirimler', 'Yakında aktif olacak')}
+          >
+            <Ionicons name="notifications-outline" size={24} color="#212121" />
+          </TouchableOpacity>
+        </View>
+
+        {/* STEP 1: Category */}
+        <View style={styles.stepContainer}>
+          <View style={styles.stepHeader}>
+            <View style={[styles.stepBadge, styles.stepBadgeActive]}>
+              <Text style={styles.stepBadgeText}>1</Text>
+            </View>
+            <Text style={styles.stepTitle}>Kategori Seçin</Text>
+          </View>
+          <CategorySelector
+            selected={selectedCategory}
+            onSelect={handleCategoryChange}
+          />
+        </View>
+
+        {/* STEP 1A: Service Type */}
+        <ServiceTypeSelector
+          selected={selectedServiceType}
+          onSelect={handleServiceTypeChange}
+        />
+
+        {/* STEP 2: Style */}
+        <View style={styles.stepContainer}>
+          <View style={styles.stepHeader}>
+            <View style={[styles.stepBadge, currentStep >= 2 && styles.stepBadgeActive]}>
+              <Text style={styles.stepBadgeText}>2</Text>
+            </View>
+            <Text style={styles.stepTitle}>Stil Seçin</Text>
+          </View>
+          <StylePicker
+            category={selectedCategory}
+            serviceType={selectedServiceType}
+            selected={selectedStyle}
+            onSelect={setSelectedStyle}
+          />
+        </View>
+
+        {/* STEP 3: Photo */}
+        {selectedStyle && (
+          <View style={styles.stepContainer}>
+            <View style={styles.stepHeader}>
+              <View style={[styles.stepBadge, currentStep >= 3 && styles.stepBadgeActive]}>
+                <Text style={styles.stepBadgeText}>3</Text>
+              </View>
+              <Text style={styles.stepTitle}>Fotoğraf Yükleyin</Text>
+            </View>
+
+            <View style={styles.heroContainer}>
+              {selectedImage ? (
+                <TouchableOpacity
+                  style={styles.imagePreview}
+                  onPress={handlePickImage}
+                  activeOpacity={0.8}
+                >
+                  <Image
+                    source={{ uri: selectedImage }}
+                    style={styles.previewImage}
+                    resizeMode="cover"
+                  />
+                  <View style={styles.imageOverlayVisible}>
+                    <View style={styles.changePhotoButton}>
+                      <Ionicons name="camera" size={20} color="#FFFFFF" />
+                      <Text style={styles.changePhotoText}>Değiştir</Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.imagePlaceholder}>
+                  <View style={styles.placeholderContent}>
+                    <View style={styles.hintBox}>
+                      <Ionicons name="information-circle-outline" size={20} color="#212121" />
+                      <Text style={styles.hintText}>{photoHint}</Text>
+                    </View>
+
+                    <Ionicons name="camera-outline" size={48} color="#8E8E93" />
+
+                    <View style={styles.buttonRow}>
+                      <TouchableOpacity
+                        style={styles.cameraButton}
+                        onPress={handleTakePhoto}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="camera" size={20} color="#FFFFFF" />
+                        <Text style={styles.buttonText}>Fotoğraf Çek</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.galleryButton}
+                        onPress={handlePickImage}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="images" size={20} color="#212121" />
+                        <Text style={styles.galleryButtonText}>Galeriden Seç</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              )}
+            </View>
+          </View>
+        )}
+
+        {/* STEP 4: Tool Selector */}
+        {selectedImage && (
+          <View style={styles.stepContainer}>
+            <View style={styles.stepHeader}>
+              <View style={[styles.stepBadge, currentStep >= 4 && styles.stepBadgeActive]}>
+                <Text style={styles.stepBadgeText}>4</Text>
+              </View>
+              <Text style={styles.stepTitle}>Ne Yapmak İstersiniz?</Text>
+            </View>
+            <View style={styles.toolSection}>
+              <ToolSelector
+                selected={selectedTool}
+                onSelect={setSelectedTool}
+                tools={availableTools}
+              />
+            </View>
+          </View>
+        )}
+
+        {/* AI Design Button */}
+        <View style={styles.designButtonContainer}>
+          <TouchableOpacity
+            style={[
+              styles.designButton,
+              !canStartDesign && styles.designButtonDisabled,
+            ]}
+            onPress={handleStartDesign}
+            disabled={!canStartDesign}
             activeOpacity={0.8}
           >
             {isProcessing ? (
-              <ActivityIndicator size="large" color="#FFFFFF" />
+              <>
+                <ActivityIndicator size="small" color="#FFFFFF" />
+                <Text style={styles.designButtonText}>AI Tasarlıyor...</Text>
+              </>
             ) : (
-              <Ionicons name="mic" size={80} color="#FFFFFF" />
+              <>
+                <Ionicons name="sparkles" size={20} color="#FFFFFF" />
+                <Text style={styles.designButtonText}>
+                  {currentTool?.buttonText || 'AI ile Tasarla'}
+                </Text>
+              </>
             )}
           </TouchableOpacity>
+
+          {!canStartDesign && !isProcessing && (
+            <Text style={styles.designHelpText}>
+              {!selectedStyle
+                ? 'Lütfen bir stil seçin'
+                : !selectedImage
+                ? 'Lütfen fotoğraf yükleyin'
+                : !selectedTool
+                ? 'Lütfen bir araç seçin'
+                : ''}
+            </Text>
+          )}
         </View>
 
-        {/* Created Task Summary */}
-        {createdTask && !statusText && (
-          <TouchableOpacity
-            onPress={() => router.push(`/task/${createdTask.id}`)}
-            style={styles.taskSummary}
-          >
-            <Text style={styles.taskSummaryTitle} numberOfLines={2}>
-              {createdTask.title}
-            </Text>
-            <Text style={styles.taskSummaryMeta}>
-              {createdTask.priority === 'urgent' ? '🔴 Acil' : ''}
-              {createdTask.profiles?.full_name && ` · ${createdTask.profiles.full_name}`}
-            </Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {/* Recent Updates - Bottom Strip */}
-      {recentTasks.length > 0 && !isSpeaking && (
-        <View style={styles.recentStrip}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.recentList}
-          >
-            {recentTasks.map((task, idx) => (
-              <TouchableOpacity
-                key={task.id}
-                onPress={() => router.push(`/task/${task.id}`)}
-                style={styles.recentItem}
-              >
-                <Text style={styles.recentText} numberOfLines={1}>
-                  {task.title}
-                </Text>
-                <Text style={styles.recentTime}>
-                  {formatRelativeTime(task.updated_at)}
-                </Text>
-                {idx < recentTasks.length - 1 && <View style={styles.recentDivider} />}
+        {/* Recent Designs */}
+        {recentDesigns.length > 0 && (
+          <View style={styles.recentSection}>
+            <View style={styles.recentHeader}>
+              <Text style={styles.recentTitle}>Son Tasarımlar</Text>
+              <TouchableOpacity onPress={() => router.push('/tasks')}>
+                <Text style={styles.seeAllText}>Tümünü Gör</Text>
               </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      )}
-
-      {/* TTS Speaking Banner */}
-      {isSpeaking && (
-        <View style={styles.speakingBanner}>
-          <View style={styles.speakingContent}>
-            <Text style={styles.speakingText}>Cevaplıyorum...</Text>
-            <View style={styles.waveContainer}>
-              {[0, 1, 2].map((i) => (
-                <Animated.View
-                  key={i}
-                  style={[
-                    styles.wave,
-                    {
-                      opacity: waveAnim.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: i === 0 ? [0.3, 1] : i === 1 ? [0.5, 0.7] : [0.7, 0.4],
-                      }),
-                    },
-                  ]}
-                />
-              ))}
             </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.recentScroll}
+            >
+              {recentDesigns.map((design) => (
+                <TouchableOpacity
+                  key={design.id}
+                  style={styles.recentCard}
+                  onPress={() => router.push(`/design/${design.id}`)}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.recentThumbnail}>
+                    {design.ai_image_url ? (
+                      <Image
+                        source={{ uri: design.ai_image_url }}
+                        style={styles.thumbnailImage}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <View style={styles.thumbnailPlaceholder}>
+                        <ActivityIndicator size="small" color="#8E8E93" />
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.recentInfo}>
+                    <Text style={styles.recentStyle} numberOfLines={1}>{design.style}</Text>
+                    <Text style={styles.recentDate}>
+                      {new Date(design.created_at).toLocaleDateString('tr-TR', {
+                        day: 'numeric',
+                        month: 'short',
+                      })}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           </View>
-          <TouchableOpacity onPress={handleCancelTTS} style={styles.cancelButton}>
-            <Ionicons name="close" size={20} color="#FFFFFF" />
-          </TouchableOpacity>
-        </View>
-      )}
-    </View>
+        )}
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
@@ -487,205 +420,262 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F5F3EF',
   },
-  
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 32,
+  },
   // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 20,
-    backgroundColor: '#F5F3EF',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
   },
   logo: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#1A1A1A',
-    letterSpacing: 1,
+    color: '#212121',
   },
-  
-  // Main Content Area
-  content: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  
-  // Greeting
-  greeting: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#1A1A1A',
-    marginBottom: 60,
-    position: 'absolute',
-    top: 60,
-  },
-  
-  // Status Text
-  statusText: {
-    fontSize: 18,
-    color: '#8E8E93',
-    fontWeight: '500',
-    position: 'absolute',
-    top: 60,
-  },
-  
-  // Microphone Container
-  micContainer: {
-    position: 'relative',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '100%',
-    height: '100%',
-  },
-  
-  // Giant Halos - Cover Entire Screen
-  halo: {
-    position: 'absolute',
-    borderRadius: 9999,
-  },
-  halo1: {
-    width: 300,
-    height: 300,
-    backgroundColor: 'rgba(0, 0, 0, 0.06)',
-  },
-  halo2: {
-    width: 450,
-    height: 450,
-    backgroundColor: 'rgba(0, 0, 0, 0.04)',
-  },
-  halo3: {
-    width: 650,
-    height: 650,
-    backgroundColor: 'rgba(0, 0, 0, 0.025)',
-  },
-  halo4: {
-    width: 900,
-    height: 900,
-    backgroundColor: 'rgba(0, 0, 0, 0.015)',
-  },
-  
-  // Giant Microphone Button
-  micButton: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    backgroundColor: '#1A1A1A',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 8,
-  },
-  micButtonDisabled: {
-    opacity: 0.6,
-  },
-  
-  // Task Summary (below mic)
-  taskSummary: {
-    position: 'absolute',
-    bottom: 120,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    marginHorizontal: 40,
-    maxWidth: '80%',
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-  },
-  taskSummaryTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1A1A1A',
-    marginBottom: 4,
-    textAlign: 'center',
-  },
-  taskSummaryMeta: {
+  tagline: {
     fontSize: 13,
     color: '#8E8E93',
-    textAlign: 'center',
+    marginTop: 2,
   },
-  
-  // Recent Updates Strip (above tab bar)
-  recentStrip: {
+  notificationButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: '#FFFFFF',
-    borderTopWidth: 1,
-    borderTopColor: '#E5E5EA',
-    paddingVertical: 12,
-    paddingBottom: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  recentList: {
+  // Steps
+  stepContainer: {
+    marginBottom: 4,
+  },
+  stepHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     paddingHorizontal: 16,
-    gap: 16,
+    marginBottom: 4,
   },
-  recentItem: {
+  stepBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#E5E5EA',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepBadgeActive: {
+    backgroundColor: '#212121',
+  },
+  stepBadgeText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  stepTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#1A1A1A',
+  },
+  // Photo Area
+  heroContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  imagePlaceholder: {
+    minHeight: 240,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: '#E5E5EA',
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  placeholderContent: {
+    alignItems: 'center',
+    gap: 16,
+    paddingHorizontal: 24,
+    paddingVertical: 24,
+  },
+  hintBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#F0EDE8',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignSelf: 'stretch',
+  },
+  hintText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#3C3C43',
+    lineHeight: 18,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 4,
+  },
+  cameraButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingRight: 16,
-  },
-  recentText: {
-    fontSize: 13,
-    color: '#1A1A1A',
-    maxWidth: 150,
-  },
-  recentTime: {
-    fontSize: 11,
-    color: '#8E8E93',
-  },
-  recentDivider: {
-    width: 1,
-    height: 12,
-    backgroundColor: '#E5E5EA',
-    marginLeft: 8,
-  },
-  
-  // Speaking Banner
-  speakingBanner: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: '#1A1A1A',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    paddingVertical: 12,
     paddingHorizontal: 20,
-    paddingVertical: 16,
-    paddingBottom: 32,
+    backgroundColor: '#212121',
+    borderRadius: 12,
   },
-  speakingContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  speakingText: {
+  buttonText: {
     fontSize: 15,
     fontWeight: '600',
     color: '#FFFFFF',
   },
-  waveContainer: {
+  galleryButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-  },
-  wave: {
-    width: 3,
-    height: 16,
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
     backgroundColor: '#FFFFFF',
-    borderRadius: 2,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
   },
-  cancelButton: {
-    width: 32,
-    height: 32,
+  galleryButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#212121',
+  },
+  imagePreview: {
+    height: 280,
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    overflow: 'hidden',
+  },
+  previewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  imageOverlayVisible: {
+    position: 'absolute',
+    bottom: 12,
+    right: 12,
+  },
+  changePhotoButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    borderRadius: 20,
+  },
+  changePhotoText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  // Tool Section
+  toolSection: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  // Design Button
+  designButtonContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    gap: 8,
+  },
+  designButton: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 16,
+    backgroundColor: '#212121',
+    borderRadius: 12,
+  },
+  designButtonDisabled: {
+    backgroundColor: '#C7C7CC',
+  },
+  designButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  designHelpText: {
+    fontSize: 13,
+    color: '#8E8E93',
+    textAlign: 'center',
+  },
+  // Recent Designs
+  recentSection: {
+    paddingVertical: 16,
+  },
+  recentHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+  recentTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1A1A1A',
+  },
+  seeAllText: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#212121',
+  },
+  recentScroll: {
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  recentCard: {
+    width: 140,
+  },
+  recentThumbnail: {
+    width: 140,
+    height: 100,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  thumbnailImage: {
+    width: '100%',
+    height: '100%',
+  },
+  thumbnailPlaceholder: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F5F3EF',
+  },
+  recentInfo: {
+    gap: 4,
+  },
+  recentStyle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1A1A1A',
+    textTransform: 'capitalize',
+  },
+  recentDate: {
+    fontSize: 12,
+    color: '#8E8E93',
   },
 });

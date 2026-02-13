@@ -1,8 +1,9 @@
-import { serve } from 'std/http/server.ts';
+// @ts-nocheck
+// Supabase Edge Function: ai-voice
+// AI Voice Command Processing
+import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 
-const ANTHROPIC_API_KEY = (typeof Deno !== 'undefined' && Deno.env && typeof Deno.env.get === 'function')
-  ? Deno.env.get('ANTHROPIC_API_KEY') || ''
-  : '';
+const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') || '';
 
 serve(async (req: Request) => {
   // CORS Headers
@@ -18,13 +19,89 @@ serve(async (req: Request) => {
   }
 
   try {
-    const { transcript, workspace_context, mode } = await req.json();
+    const { transcript, workspace_context, mode, context } = await req.json();
 
     if (!transcript) {
       return new Response(
         JSON.stringify({ error: 'Transcript gerekli' }),
         { 
           status: 400, 
+          headers: { 
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+          } 
+        }
+      );
+    }
+
+    // ========================================
+    // MASTER REGISTER MODE (EvimAI)
+    // ========================================
+    if (context === 'master_register') {
+      const masterRegisterPrompt = `Sen bir usta-müşteri eşleştirme asistanısın (EvimAI platformu). 
+Kullanıcı sesli komutla usta olarak kaydolmak istiyor.
+
+GÖREV:
+Sesli komuttan şu bilgileri çıkar:
+1. İsim (varsa)
+2. Uzmanlık alanları (birden fazla olabilir)
+3. Hizmet bölgeleri (şehir/ilçe)
+4. Deneyim yılı (varsa)
+5. Kısa bio
+
+ÇIKARIMLARI JSON OLARAK VER:
+{
+  "intent": "master_register",
+  "data": {
+    "name": "İsim (varsa null)",
+    "specialties": ["Yerden Isıtma", "Tadilat"],
+    "service_areas": ["Balıkesir", "Bursa"],
+    "experience_years": 10,
+    "bio": "Kısa özet cümle"
+  },
+  "response": "Harika! Yerden ısıtma ve tadilat ustası olarak kaydınızı tamamlıyorum. Balıkesir ve Bursa'dan gelen talepleri görebileceksiniz."
+}
+
+SES KOMUTU: "${transcript}"
+
+SADECE JSON DÖNDÜR, BAŞKA AÇIKLAMA YAPMA.`;
+
+      const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-3-5-sonnet-20241022',
+          max_tokens: 1024,
+          messages: [{
+            role: 'user',
+            content: masterRegisterPrompt,
+          }],
+        }),
+      });
+
+      if (!anthropicResponse.ok) {
+        throw new Error('Claude API isteği başarısız');
+      }
+
+      const result = await anthropicResponse.json();
+      const aiText = result.content[0].text;
+
+      // Parse JSON
+      const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error('AI yanıtı parse edilemedi');
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      return new Response(
+        JSON.stringify(parsed),
+        { 
+          status: 200, 
           headers: { 
             ...corsHeaders,
             'Content-Type': 'application/json',

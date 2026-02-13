@@ -1,400 +1,323 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
-  StyleSheet,
-  ScrollView,
   TouchableOpacity,
-  RefreshControl,
+  ScrollView,
+  StyleSheet,
   Image,
-  Linking,
-  ActionSheetIOS,
-  Platform,
-  Alert,
+  RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { router } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
-import { getWorkspaceInfo } from '../../lib/workspace';
+import { useAuth } from '../../contexts/AuthContext';
 
-interface TeamMember {
+interface Chat {
   id: string;
-  user_id: string;
-  role: string;
-  full_name: string;
-  avatar_url?: string;
-  phone?: string;
-  last_seen?: string;
-  is_online?: boolean;
-  active_task_count?: number;
-  completed_today?: number;
-}
-
-interface Activity {
-  id: string;
-  user_name: string;
-  user_avatar?: string;
-  action: string;
-  target: string;
-  time: string;
+  job_request_id: string;
+  customer_id: string;
+  master_id: string;
+  last_message: string | null;
+  last_message_at: string | null;
+  unread_count_customer: number;
+  unread_count_master: number;
+  is_active: boolean;
   created_at: string;
+  master?: {
+    name: string;
+    profile_image_url: string | null;
+  };
+  customer?: {
+    full_name: string;
+  };
+  job_request?: {
+    status: string;
+  };
 }
 
-export default function TeamScreen() {
-  const router = useRouter();
-  const [members, setMembers] = useState<TeamMember[]>([]);
-  const [activities, setActivities] = useState<Activity[]>([]);
+export default function ChatsScreen() {
+  const { session, profile } = useAuth();
+  const [chats, setChats] = useState<Chat[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<'members' | 'activity'>('members');
-  const [userRole, setUserRole] = useState<string>('member');
+  const [userRole, setUserRole] = useState<'customer' | 'master' | 'both'>('customer');
 
+  // Load user role
   useEffect(() => {
-    loadTeamData();
+    loadUserRole();
   }, []);
 
-  const loadTeamData = async () => {
+  const loadUserRole = async () => {
     try {
-      const wsInfo = await getWorkspaceInfo();
-      if (!wsInfo) return;
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', session?.user?.id)
+        .single();
 
-      setUserRole(wsInfo.role);
+      if (error) throw error;
 
-      // Ekip üyelerini çek
-      const { data: memberData, error: memberError } = await supabase
-        .from('workspace_members')
+      setUserRole(data?.role || 'customer');
+    } catch (error) {
+      console.error('❌ Rol yükleme hatası:', error);
+    }
+  };
+
+  // Load chats
+  const loadChats = async () => {
+    if (!session?.user?.id) return;
+
+    try {
+      let query = supabase
+        .from('chats')
         .select(`
-          id,
-          user_id,
-          role,
-          profiles:user_id (
-            id,
-            full_name,
-            avatar_url,
-            phone,
-            last_seen_at
-          )
+          *,
+          master:masters!chats_master_id_fkey(name, profile_image_url),
+          customer:profiles!chats_customer_id_fkey(full_name),
+          job_request:job_requests!chats_job_request_id_fkey(status)
         `)
-        .eq('workspace_id', wsInfo.workspaceId)
-        .eq('is_active', true);
+        .eq('is_active', true)
+        .order('last_message_at', { ascending: false, nullsFirst: false });
 
-      if (memberError) throw memberError;
+      // Filter by user role
+      if (userRole === 'customer' || userRole === 'both') {
+        query = query.eq('customer_id', session.user.id);
+      } else if (userRole === 'master') {
+        // Get master ID for this user
+        const { data: masterData } = await supabase
+          .from('masters')
+          .select('id')
+          .eq('user_id', session.user.id)
+          .single();
 
-      // Her üye için aktif görev sayısı
-      const membersWithStats = await Promise.all(
-        (memberData || []).map(async (m: any) => {
-          const { count: activeCount } = await supabase
-            .from('tasks')
-            .select('*', { count: 'exact', head: true })
-            .eq('workspace_id', wsInfo.workspaceId)
-            .eq('assigned_to', m.profiles?.full_name)
-            .neq('status', 'done');
+        if (masterData) {
+          query = query.eq('master_id', masterData.id);
+        }
+      }
 
-          const { count: completedCount } = await supabase
-            .from('tasks')
-            .select('*', { count: 'exact', head: true })
-            .eq('workspace_id', wsInfo.workspaceId)
-            .eq('assigned_to', m.profiles?.full_name)
-            .eq('status', 'done')
-            .gte('created_at', new Date().toISOString().split('T')[0]);
+      const { data, error } = await query;
 
-          return {
-            id: m.id,
-            user_id: m.user_id,
-            role: m.role,
-            full_name: m.profiles?.full_name || 'İsimsiz',
-            avatar_url: m.profiles?.avatar_url,
-            phone: m.profiles?.phone,
-            last_seen: m.profiles?.last_seen_at ? formatTimeAgo(m.profiles.last_seen_at) : null,
-            active_task_count: activeCount || 0,
-            completed_today: completedCount || 0,
-          };
-        })
-      );
+      if (error) throw error;
 
-      setMembers(membersWithStats);
-
-      // Son aktiviteler (notifications tablosundan)
-      const { data: activityData } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('workspace_id', wsInfo.workspaceId)
-        .order('sent_at', { ascending: false })
-        .limit(20);
-
-      const formattedActivities = (activityData || []).map((a: any) => ({
-        id: a.id,
-        user_name: a.title?.split(':')[0] || 'Ekip',
-        action: a.type,
-        target: a.body || '',
-        time: formatTimeAgo(a.sent_at),
-        created_at: a.sent_at,
-      }));
-
-      setActivities(formattedActivities);
-    } catch (err) {
-      console.error('Ekip verisi yüklenemedi:', err);
+      setChats(data || []);
+    } catch (error) {
+      console.error('❌ Sohbetler yüklenemedi:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  const formatTimeAgo = (dateString: string) => {
-    const now = new Date();
-    const date = new Date(dateString);
-    const diff = Math.floor((now.getTime() - date.getTime()) / 1000);
-
-    if (diff < 60) return 'Az önce';
-    if (diff < 3600) return `${Math.floor(diff / 60)} dk önce`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)} saat önce`;
-    return `${Math.floor(diff / 86400)} gün önce`;
-  };
-
-  const onRefresh = () => {
-    setRefreshing(true);
-    loadTeamData();
-  };
-
-  const getRoleLabel = (role: string) => {
-    switch (role) {
-      case 'owner': return 'Yönetici';
-      case 'admin': return 'Admin';
-      case 'member': return 'Üye';
-      default: return role;
+  useEffect(() => {
+    if (userRole) {
+      loadChats();
     }
-  };
+  }, [userRole]);
 
-  const callMember = (phone: string) => {
-    Linking.openURL(`tel:${phone}`);
-  };
+  // Refresh when screen is focused
+  useFocusEffect(
+    useCallback(() => {
+      loadChats();
+    }, [userRole])
+  );
 
-  const sendMessage = (member: TeamMember) => {
-    // TODO: In-app mesajlaşma veya WhatsApp
-    if (member.phone) {
-      Linking.openURL(`https://wa.me/90${member.phone.replace(/\D/g, '')}`);
-    }
-  };
+  // Subscribe to real-time updates
+  useEffect(() => {
+    if (!session?.user?.id) return;
 
-  const showMemberMenu = (member: TeamMember) => {
-    const options = ['Profili Gör', 'Görevlerini Gör', 'İptal'];
-    
-    // Yönetici ise ek seçenekler
-    if (userRole === 'owner' || userRole === 'admin') {
-      options.splice(2, 0, 'Rolü Değiştir', 'Ekipten Çıkar');
-    }
+    console.log('📡 Realtime sohbet dinlemesi başlatıldı');
 
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
+    const channel = supabase
+      .channel('chats-changes')
+      .on(
+        'postgres_changes',
         {
-          options,
-          cancelButtonIndex: options.length - 1,
-          destructiveButtonIndex: options.indexOf('Ekipten Çıkar'),
-          title: member.full_name,
+          event: '*',
+          schema: 'public',
+          table: 'chats',
         },
-        (buttonIndex) => handleMemberMenuAction(member, options[buttonIndex])
-      );
+        (payload) => {
+          console.log('🔄 Sohbet değişti:', payload);
+          loadChats();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'chat_messages',
+        },
+        (payload) => {
+          console.log('💬 Yeni mesaj geldi:', payload);
+          loadChats();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      console.log('🔌 Realtime bağlantısı kapatıldı');
+      supabase.removeChannel(channel);
+    };
+  }, [session?.user?.id]);
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadChats();
+  };
+
+  const handleChatPress = (chat: Chat) => {
+    router.push(`/chat/${chat.id}`);
+  };
+
+  const getUnreadCount = (chat: Chat) => {
+    return userRole === 'customer'
+      ? chat.unread_count_customer
+      : chat.unread_count_master;
+  };
+
+  const getChatName = (chat: Chat) => {
+    if (userRole === 'customer') {
+      return chat.master?.name || 'Usta';
     } else {
-      Alert.alert(member.full_name, 'Ne yapmak istiyorsunuz?',
-        options.map(opt => ({
-          text: opt,
-          onPress: () => handleMemberMenuAction(member, opt),
-          style: opt === 'İptal' ? 'cancel' : opt === 'Ekipten Çıkar' ? 'destructive' : 'default',
-        }))
-      );
+      return chat.customer?.full_name || 'Müşteri';
     }
   };
 
-  const handleMemberMenuAction = (member: TeamMember, action: string) => {
-    switch (action) {
-      case 'Profili Gör':
-        router.push(`/team/${member.user_id}`);
-        break;
-      case 'Görevlerini Gör':
-        router.push(`/tasks?assignedTo=${member.full_name}`);
-        break;
-      case 'Ekipten Çıkar':
-        Alert.alert(
-          'Ekipten Çıkar',
-          `${member.full_name} ekipten çıkarılsın mı?`,
-          [
-            { text: 'İptal', style: 'cancel' },
-            { text: 'Çıkar', style: 'destructive', onPress: () => removeMember(member) },
-          ]
-        );
-        break;
-    }
+  const getJobStatusBadge = (status: string) => {
+    const statusMap: Record<string, { label: string; color: string }> = {
+      open: { label: 'Yeni', color: '#007AFF' },
+      contacted: { label: 'Görüşülüyor', color: '#FFB800' },
+      accepted: { label: 'Kabul Edildi', color: '#34C759' },
+      in_progress: { label: 'Devam Ediyor', color: '#FF9500' },
+      completed: { label: 'Tamamlandı', color: '#8E8E93' },
+    };
+
+    return statusMap[status] || { label: status, color: '#8E8E93' };
   };
 
-  const removeMember = async (member: TeamMember) => {
-    await supabase
-      .from('workspace_members')
-      .update({ is_active: false })
-      .eq('id', member.id);
-    loadTeamData();
-  };
+  const formatTime = (dateString: string | null) => {
+    if (!dateString) return '';
 
-  const Avatar = ({ name, imageUrl, size = 48 }: { name: string; imageUrl?: string; size?: number }) => {
-    const initials = name
-      .split(' ')
-      .map(n => n[0])
-      .join('')
-      .toUpperCase()
-      .slice(0, 2);
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
 
-    if (imageUrl) {
-      return (
-        <Image 
-          source={{ uri: imageUrl }} 
-          style={{ width: size, height: size, borderRadius: size / 2 }} 
-        />
-      );
-    }
+    if (diffMins < 1) return 'Şimdi';
+    if (diffMins < 60) return `${diffMins}d`;
+    if (diffHours < 24) return `${diffHours}s`;
+    if (diffDays < 7) return `${diffDays}g`;
 
-    return (
-      <View style={[styles.avatarPlaceholder, { width: size, height: size, borderRadius: size / 2 }]}>
-        <Text style={[styles.avatarInitials, { fontSize: size * 0.4 }]}>{initials}</Text>
-      </View>
-    );
+    return date.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' });
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Ekip</Text>
-        <TouchableOpacity style={styles.headerButton} onPress={() => router.push('/invite')}>
-          <Ionicons name="person-add-outline" size={22} color="#1A1A1A" />
-        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Sohbetler</Text>
+        <Text style={styles.headerSubtitle}>
+          {chats.length} aktif sohbet
+        </Text>
       </View>
 
-      {/* Tab Switcher */}
-      <View style={styles.tabContainer}>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === 'members' && styles.tabActive]}
-          onPress={() => setActiveTab('members')}
-        >
-          <Text style={[styles.tabText, activeTab === 'members' && styles.tabTextActive]}>
-            Üyeler ({members.length})
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === 'activity' && styles.tabActive]}
-          onPress={() => setActiveTab('activity')}
-        >
-          <Text style={[styles.tabText, activeTab === 'activity' && styles.tabTextActive]}>
-            Aktivite
-          </Text>
-        </TouchableOpacity>
-      </View>
-
+      {/* Chat List */}
       <ScrollView
-        style={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1A1A1A" />}
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+        }
       >
-        {activeTab === 'members' ? (
-          /* Üyeler Listesi */
-          <View style={styles.memberList}>
-            {members.map((member) => (
-              <View key={member.id} style={styles.memberCard}>
-                {/* Üst: Avatar + İsim + Menü */}
-                <View style={styles.memberHeader}>
-                  <Avatar name={member.full_name} imageUrl={member.avatar_url} size={48} />
-                  <View style={styles.memberInfo}>
-                    <Text style={styles.memberName}>{member.full_name}</Text>
-                    <Text style={styles.memberMeta}>
-                      {getRoleLabel(member.role)} • Son görülme: {member.last_seen || 'Bilinmiyor'}
-                    </Text>
-                  </View>
-                  <TouchableOpacity 
-                    style={styles.memberMenu}
-                    onPress={() => showMemberMenu(member)}
-                  >
-                    <Ionicons name="ellipsis-horizontal" size={18} color="#8E8E93" />
-                  </TouchableOpacity>
-                </View>
-
-                {/* Divider */}
-                <View style={styles.memberDivider} />
-
-                {/* Ortası: İstatistikler */}
-                <View style={styles.memberStatsRow}>
-                  <View style={styles.memberStatItem}>
-                    <Ionicons name="document-text-outline" size={14} color="#8E8E93" />
-                    <Text style={styles.memberStatText}>{member.active_task_count} aktif görev</Text>
-                  </View>
-                  <View style={styles.memberStatItem}>
-                    <Ionicons name="checkmark-circle-outline" size={14} color="#8E8E93" />
-                    <Text style={styles.memberStatText}>{member.completed_today} bugün tamamladı</Text>
-                  </View>
-                </View>
-
-                {/* Telefon (varsa) */}
-                {member.phone && (
-                  <TouchableOpacity style={styles.memberPhone} onPress={() => callMember(member.phone!)}>
-                    <Ionicons name="call-outline" size={14} color="#8E8E93" />
-                    <Text style={styles.memberPhoneText}>{member.phone}</Text>
-                  </TouchableOpacity>
-                )}
-
-                {/* Divider */}
-                <View style={styles.memberDivider} />
-
-                {/* Alt: Aksiyonlar */}
-                <View style={styles.memberActions}>
-                  <TouchableOpacity 
-                    style={styles.memberActionButton}
-                    onPress={() => router.push(`/task/new?assignTo=${member.full_name}`)}
-                  >
-                    <Text style={styles.memberActionText}>Görev Ata</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity 
-                    style={styles.memberActionButton}
-                    onPress={() => sendMessage(member)}
-                  >
-                    <Text style={styles.memberActionText}>Mesaj Gönder</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
-
-            {members.length === 0 && !loading && (
-              <View style={styles.emptyState}>
-                <Ionicons name="people-outline" size={48} color="#E5E5EA" />
-                <Text style={styles.emptyText}>Henüz ekip üyesi yok</Text>
-                <TouchableOpacity style={styles.inviteButton} onPress={() => router.push('/invite')}>
-                  <Text style={styles.inviteButtonText}>Davet Gönder</Text>
-                </TouchableOpacity>
-              </View>
-            )}
+        {loading ? (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>Yükleniyor...</Text>
+          </View>
+        ) : chats.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Ionicons name="chatbubbles-outline" size={64} color="#8E8E93" />
+            <Text style={styles.emptyTitle}>Henüz Sohbet Yok</Text>
+            <Text style={styles.emptySubtitle}>
+              Bir tasarım için usta bulduğunuzda sohbet başlatabilirsiniz
+            </Text>
           </View>
         ) : (
-          /* Aktivite Listesi */
-          <View style={styles.activityList}>
-            {activities.map((activity) => (
-              <View key={activity.id} style={styles.activityItem}>
-                <View style={styles.activityDot} />
-                <View style={styles.activityContent}>
-                  <Text style={styles.activityText}>
-                    <Text style={styles.activityUser}>{activity.user_name}</Text>
-                    {' '}{activity.target}
-                  </Text>
-                  <Text style={styles.activityTime}>{activity.time}</Text>
+          chats.map((chat) => {
+            const unreadCount = getUnreadCount(chat);
+            const jobStatus = chat.job_request?.status || 'open';
+            const statusBadge = getJobStatusBadge(jobStatus);
+
+            return (
+              <TouchableOpacity
+                key={chat.id}
+                style={styles.chatCard}
+                onPress={() => handleChatPress(chat)}
+                activeOpacity={0.7}
+              >
+                {/* Profile Image */}
+                <View style={styles.profileContainer}>
+                  {chat.master?.profile_image_url ? (
+                    <Image
+                      source={{ uri: chat.master.profile_image_url }}
+                      style={styles.profileImage}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View style={styles.profilePlaceholder}>
+                      <Ionicons name="person" size={28} color="#8E8E93" />
+                    </View>
+                  )}
+                  {unreadCount > 0 && (
+                    <View style={styles.unreadBadge}>
+                      <Text style={styles.unreadBadgeText}>
+                        {unreadCount > 9 ? '9+' : unreadCount}
+                      </Text>
+                    </View>
+                  )}
                 </View>
-              </View>
-            ))}
 
-            {activities.length === 0 && !loading && (
-              <View style={styles.emptyState}>
-                <Ionicons name="pulse-outline" size={48} color="#E5E5EA" />
-                <Text style={styles.emptyText}>Henüz aktivite yok</Text>
-              </View>
-            )}
-          </View>
+                {/* Chat Info */}
+                <View style={styles.chatInfo}>
+                  <View style={styles.chatHeader}>
+                    <Text style={styles.chatName}>{getChatName(chat)}</Text>
+                    <Text style={styles.chatTime}>
+                      {formatTime(chat.last_message_at)}
+                    </Text>
+                  </View>
+
+                  <View style={styles.chatFooter}>
+                    <Text
+                      style={[
+                        styles.lastMessage,
+                        unreadCount > 0 && styles.lastMessageUnread,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {chat.last_message || 'Sohbet başlatıldı'}
+                    </Text>
+                    <View
+                      style={[
+                        styles.statusBadge,
+                        { backgroundColor: statusBadge.color },
+                      ]}
+                    >
+                      <Text style={styles.statusBadgeText}>
+                        {statusBadge.label}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            );
+          })
         )}
-
-        <View style={{ height: 40 }} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -403,203 +326,142 @@ export default function TeamScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FAF9F6',
+    backgroundColor: '#F5F3EF',
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5EA',
+    backgroundColor: '#FFFFFF',
   },
   headerTitle: {
     fontSize: 28,
     fontWeight: '700',
     color: '#1A1A1A',
+    marginBottom: 4,
   },
-  headerButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-  },
-  tabContainer: {
-    flexDirection: 'row',
-    marginHorizontal: 20,
-    marginBottom: 16,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 4,
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-  },
-  tab: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    borderRadius: 8,
-  },
-  tabActive: {
-    backgroundColor: '#1A1A1A',
-  },
-  tabText: {
-    fontSize: 14,
-    fontWeight: '500',
+  headerSubtitle: {
+    fontSize: 15,
     color: '#8E8E93',
   },
-  tabTextActive: {
-    color: '#FFFFFF',
-  },
-  content: {
+  scrollView: {
     flex: 1,
   },
-  memberList: {
-    paddingHorizontal: 20,
+  scrollContent: {
+    paddingVertical: 8,
   },
-  memberCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-    overflow: 'hidden',
-  },
-  memberHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-  },
-  avatarPlaceholder: {
-    backgroundColor: '#E5E5EA',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarInitials: {
-    fontWeight: '600',
-    color: '#3C3C43',
-  },
-  memberInfo: {
-    flex: 1,
-    marginLeft: 14,
-  },
-  memberName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1A1A1A',
-  },
-  memberMeta: {
-    fontSize: 13,
-    color: '#8E8E93',
-    marginTop: 2,
-  },
-  memberMenu: {
-    padding: 8,
-  },
-  memberDivider: {
-    height: 1,
-    backgroundColor: '#F5F3EF',
-    marginHorizontal: 16,
-  },
-  memberStatsRow: {
+  chatCard: {
     flexDirection: 'row',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    gap: 20,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5EA',
   },
-  memberStatItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
+  profileContainer: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    overflow: 'hidden',
+    position: 'relative',
   },
-  memberStatText: {
-    fontSize: 13,
-    color: '#3C3C43',
+  profileImage: {
+    width: '100%',
+    height: '100%',
   },
-  memberPhone: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    gap: 6,
-  },
-  memberPhoneText: {
-    fontSize: 13,
-    color: '#8E8E93',
-  },
-  memberActions: {
-    flexDirection: 'row',
-    padding: 12,
-    gap: 12,
-  },
-  memberActionButton: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
+  profilePlaceholder: {
+    width: '100%',
+    height: '100%',
     backgroundColor: '#F5F3EF',
-    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  memberActionText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#1A1A1A',
+  unreadBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#FF3B30',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
-  activityList: {
-    paddingHorizontal: 20,
+  unreadBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
-  activityItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 16,
-  },
-  activityDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#1A1A1A',
-    marginTop: 6,
-    marginRight: 12,
-  },
-  activityContent: {
+  chatInfo: {
     flex: 1,
+    marginLeft: 12,
+    justifyContent: 'space-between',
   },
-  activityText: {
-    fontSize: 14,
-    color: '#3C3C43',
-    lineHeight: 20,
+  chatHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
   },
-  activityUser: {
+  chatName: {
+    fontSize: 17,
     fontWeight: '600',
     color: '#1A1A1A',
   },
-  activityTime: {
-    fontSize: 12,
+  chatTime: {
+    fontSize: 13,
     color: '#8E8E93',
-    marginTop: 4,
   },
-  emptyState: {
+  chatFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 60,
   },
-  emptyText: {
+  lastMessage: {
+    flex: 1,
     fontSize: 15,
     color: '#8E8E93',
-    marginTop: 12,
+    marginRight: 8,
   },
-  inviteButton: {
-    marginTop: 16,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    backgroundColor: '#1A1A1A',
-    borderRadius: 20,
-  },
-  inviteButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
+  lastMessageUnread: {
     fontWeight: '600',
+    color: '#1A1A1A',
+  },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+  },
+  statusBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  emptyContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 80,
+    gap: 12,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#1A1A1A',
+  },
+  emptySubtitle: {
+    fontSize: 15,
+    color: '#8E8E93',
+    textAlign: 'center',
+    paddingHorizontal: 40,
+    lineHeight: 22,
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#8E8E93',
   },
 });

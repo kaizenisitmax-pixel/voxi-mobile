@@ -18,8 +18,8 @@ import * as FileSystem from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
 import { supabase } from '@/lib/supabase';
 import { speakText } from '@/utils/audio';
-import { startRecording, stopRecording } from '@/utils/recording';
-import { analyzeCustomerCommand } from '@/lib/ai';
+import { startRecording, stopRecording, transcribeAudio } from '@/utils/recording';
+import { processVision } from '@/lib/ai';
 
 interface Customer {
   id: string;
@@ -260,11 +260,11 @@ export default function CustomerDetail() {
 
       if (error) throw error;
 
-      await supabase.from('system_logs').insert({
-        entity_type: 'customer',
-        entity_id: id,
-        action: 'update',
+      await supabase.from('customer_logs').insert({
+        customer_id: id,
+        action: 'field_update',
         details: { field, old_value: customer?.[field as keyof Customer], new_value: value },
+        created_at: new Date().toISOString(),
       });
 
       console.log('✅ Alan kaydedildi:', field);
@@ -276,11 +276,10 @@ export default function CustomerDetail() {
     }
   };
 
-  // Voice input
+  // Voice input (for Detail tab - updates customer fields)
   const handleVoiceInput = async () => {
     try {
       if (isRecording) {
-        // Stop recording
         console.log('🎤 Müşteri: Kayıt durduruluyor');
         setIsRecording(false);
         setStatusText('Analiz ediliyor...');
@@ -288,58 +287,50 @@ export default function CustomerDetail() {
         const result = await stopRecording(recordingRef.current);
         recordingRef.current = null;
 
-        if (!result?.uri || !result?.transcript) {
+        if (!result?.uri) {
           setStatusText('');
           return;
         }
 
-        console.log('📝 Müşteri transcript:', result.transcript);
-        setIsAnalyzing(true);
-
-        // AI analysis
-        const aiResult = await analyzeCustomerCommand(result.transcript, customer || {});
-        console.log('🧠 Müşteri AI sonuç:', JSON.stringify(aiResult));
-
-        // Auto-save updates
-        if (aiResult.updates && Object.keys(aiResult.updates).length > 0) {
-          const validUpdates: any = {};
-          Object.entries(aiResult.updates).forEach(([key, value]) => {
-            if (value !== null && value !== undefined) {
-              validUpdates[key] = value;
-            }
-          });
-
-          if (Object.keys(validUpdates).length > 0) {
-            const { error } = await supabase
-              .from('customers')
-              .update(validUpdates)
-              .eq('id', id);
-
-            if (error) throw error;
-
-            console.log('💾 Müşteri güncellendi:', validUpdates);
-
-            await supabase.from('system_logs').insert({
-              entity_type: 'customer',
-              entity_id: id,
-              action: 'voice_update',
-              details: { transcript: result.transcript, updates: validUpdates },
-            });
-
-            await fetchCustomer();
-          }
+        const transcript = await transcribeAudio(result.uri);
+        if (!transcript) {
+          setStatusText('');
+          return;
         }
 
-        // TTS response
-        const response = aiResult.spoken_response || 'Tamam';
-        console.log('🔊 Müşteri TTS:', response);
-        await speakText(response);
+        console.log('📝 Müşteri transcript:', transcript);
+        setIsAnalyzing(true);
 
+        const { data: aiResult, error: aiError } = await supabase.functions.invoke('ai-voice', {
+          body: { transcript, context: 'customer_detail', customer_data: customer }
+        });
+
+        if (aiError || !aiResult) throw new Error('AI analizi başarısız');
+        console.log('🧠 Müşteri AI:', aiResult);
+
+        if (aiResult.data && Object.keys(aiResult.data).length > 0) {
+          const { error } = await supabase
+            .from('customers')
+            .update(aiResult.data)
+            .eq('id', id);
+
+          if (error) throw error;
+
+          await supabase.from('customer_logs').insert({
+            customer_id: id,
+            action: 'voice_update',
+            details: { transcript, updates: aiResult.data },
+            created_at: new Date().toISOString(),
+          });
+
+          await fetchCustomer();
+        }
+
+        await speakText(aiResult.response || 'Müşteri bilgileri güncellendi');
         setStatusText('');
         setIsAnalyzing(false);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } else {
-        // Start recording
         console.log('🎤 Müşteri: Kayıt başlıyor');
         setIsRecording(true);
         setStatusText('Dinliyorum...');
@@ -347,7 +338,6 @@ export default function CustomerDetail() {
 
         const recording = await startRecording();
         recordingRef.current = recording;
-        console.log('🎤 Müşteri: Kayıt başladı');
       }
     } catch (error) {
       console.error('❌ Ses hatası:', error);
@@ -365,29 +355,21 @@ export default function CustomerDetail() {
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.7,
-        base64: true,
       });
 
       if (result.canceled) return;
 
-      console.log('📸 Base64 boyut:', result.assets[0].base64?.length);
       setIsAnalyzing(true);
       setStatusText('Fotoğraf analiz ediliyor...');
 
       // AI Vision analysis
-      const { analyzeImageForCard } = await import('@/lib/ai');
-      const analysis = await analyzeImageForCard(
-        result.assets[0].base64!,
-        'customer',
-        customer || {}
-      );
-
-      console.log('🧠 Müşteri görsel analiz:', analysis);
+      const visionResult = await processVision(result.assets[0].uri, 'business_card');
+      console.log('🧠 Müşteri görsel analiz:', visionResult);
 
       // Auto-save updates
-      if (analysis.updates && Object.keys(analysis.updates).length > 0) {
+      if (visionResult?.result && typeof visionResult.result === 'object') {
         const validUpdates: any = {};
-        Object.entries(analysis.updates).forEach(([key, value]) => {
+        Object.entries(visionResult.result).forEach(([key, value]) => {
           if (value !== null && value !== undefined) {
             validUpdates[key] = value;
           }
@@ -403,11 +385,11 @@ export default function CustomerDetail() {
 
           console.log('💾 Müşteri fotoğraftan güncellendi:', validUpdates);
 
-          await supabase.from('system_logs').insert({
-            entity_type: 'customer',
-            entity_id: id,
+          await supabase.from('customer_logs').insert({
+            customer_id: id,
             action: 'photo_analysis',
             details: { updates: validUpdates },
+            created_at: new Date().toISOString(),
           });
 
           await fetchCustomer();
@@ -415,9 +397,7 @@ export default function CustomerDetail() {
       }
 
       // TTS response
-      const response = analysis.spoken_response || 'Bilgiler güncellendi';
-      console.log('🔊 Müşteri görsel TTS:', response);
-      await speakText(response);
+      await speakText('Kartvizit bilgileri okundu');
 
       setStatusText('');
       setIsAnalyzing(false);
@@ -440,31 +420,17 @@ export default function CustomerDetail() {
 
       if (result.canceled) return;
 
-      console.log('📁 Dosya boyut:', result.assets[0].size);
       setIsAnalyzing(true);
       setStatusText('Dosya analiz ediliyor...');
 
-      // Read file as base64
-      const base64 = await FileSystem.readAsStringAsync(result.assets[0].uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-
-      console.log('📁 Base64 boyut:', base64.length);
-
-      // AI analysis
-      const { analyzeImageForCard } = await import('@/lib/ai');
-      const analysis = await analyzeImageForCard(
-        base64,
-        'customer',
-        customer || {}
-      );
-
-      console.log('🧠 Müşteri dosya analiz:', analysis);
+      // AI Vision analysis
+      const visionResult = await processVision(result.assets[0].uri, 'document');
+      console.log('🧠 Müşteri dosya analiz:', visionResult);
 
       // Auto-save updates
-      if (analysis.updates && Object.keys(analysis.updates).length > 0) {
+      if (visionResult?.result && typeof visionResult.result === 'object') {
         const validUpdates: any = {};
-        Object.entries(analysis.updates).forEach(([key, value]) => {
+        Object.entries(visionResult.result).forEach(([key, value]) => {
           if (value !== null && value !== undefined) {
             validUpdates[key] = value;
           }
@@ -480,11 +446,11 @@ export default function CustomerDetail() {
 
           console.log('💾 Müşteri dosyadan güncellendi:', validUpdates);
 
-          await supabase.from('system_logs').insert({
-            entity_type: 'customer',
-            entity_id: id,
+          await supabase.from('customer_logs').insert({
+            customer_id: id,
             action: 'file_analysis',
             details: { updates: validUpdates },
+            created_at: new Date().toISOString(),
           });
 
           await fetchCustomer();
@@ -492,9 +458,7 @@ export default function CustomerDetail() {
       }
 
       // TTS response
-      const response = analysis.spoken_response || 'Bilgiler güncellendi';
-      console.log('🔊 Müşteri dosya TTS:', response);
-      await speakText(response);
+      await speakText('Belge bilgileri okundu');
 
       setStatusText('');
       setIsAnalyzing(false);

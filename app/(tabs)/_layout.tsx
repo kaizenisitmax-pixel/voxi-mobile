@@ -16,44 +16,45 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Başlangıç',
+          title: 'Tasarla',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="radio-outline" size={24} color={color} />
+            <Ionicons name="camera-outline" size={24} color={color} />
           ),
         }}
       />
       <Tabs.Screen
         name="tasks"
         options={{
-          title: 'Görevler',
+          title: 'Kütüphane',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="document-text-outline" size={24} color={color} />
+            <Ionicons name="grid-outline" size={24} color={color} />
           ),
         }}
       />
       <Tabs.Screen
         name="team"
         options={{
-          title: 'Ekip',
+          title: 'Sohbetler',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="people-outline" size={24} color={color} />
+            <Ionicons name="chatbubbles-outline" size={24} color={color} />
           ),
         }}
       />
       <Tabs.Screen
         name="search"
         options={{
-          title: 'Araçlar',
+          title: 'Profil',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="apps-outline" size={24} color={color} />
+            <Ionicons name="person-outline" size={24} color={color} />
           ),
         }}
       />
 
-      {/* Hidden screens */}
+      {/* Hidden screens - VOXI legacy */}
       <Tabs.Screen name="completed" options={{ href: null }} />
       <Tabs.Screen name="newTask" options={{ href: null }} />
       <Tabs.Screen name="settings" options={{ href: null }} />
+      <Tabs.Screen name="voxi" options={{ href: null }} />
     </Tabs>
   );
 }

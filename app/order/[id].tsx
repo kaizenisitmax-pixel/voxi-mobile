@@ -353,64 +353,40 @@ export default function OrderDetail() {
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         quality: 0.7,
-        base64: true,
       });
 
       if (result.canceled) return;
 
-      console.log('📸 Base64 boyut:', result.assets[0].base64?.length);
       setIsAnalyzing(true);
       setStatusText('Fotoğraf analiz ediliyor...');
 
       // AI Vision analysis
-      const { analyzeImageForCard } = await import('@/lib/ai');
-      const analysis = await analyzeImageForCard(
-        result.assets[0].base64!,
-        'order',
-        order || {}
-      );
-
-      console.log('🧠 Sipariş görsel analiz:', analysis);
+      const visionResult = await processVision(result.assets[0].uri, 'order');
+      console.log('🧠 Sipariş görsel analiz:', visionResult);
 
       // Auto-save updates
-      const updates: any = {};
+      if (visionResult?.result && typeof visionResult.result === 'object') {
+        const updates: any = { ...visionResult.result };
 
-      // Handle details_append
-      if (analysis.details_append) {
-        const currentDetails = order?.details || '';
-        const newDetails = currentDetails
-          ? `${currentDetails}\n\n${analysis.details_append}`
-          : analysis.details_append;
-        updates.details = newDetails;
-      }
+        if (Object.keys(updates).length > 0) {
+          const { error } = await supabase
+            .from('orders')
+            .update(updates)
+            .eq('id', id);
 
-      // Handle other updates
-      if (analysis.updates && Object.keys(analysis.updates).length > 0) {
-        Object.entries(analysis.updates).forEach(([key, value]) => {
-          if (value !== null && value !== undefined) {
-            updates[key] = value;
-          }
-        });
-      }
+          if (error) throw error;
 
-      if (Object.keys(updates).length > 0) {
-        const { error } = await supabase
-          .from('orders')
-          .update(updates)
-          .eq('id', id);
+          console.log('💾 Sipariş fotoğraftan güncellendi:', updates);
 
-        if (error) throw error;
+          await supabase.from('order_logs').insert({
+            order_id: id,
+            action: 'photo_analysis',
+            details: { updates },
+            created_at: new Date().toISOString(),
+          });
 
-        console.log('💾 Sipariş fotoğraftan güncellendi:', updates);
-
-        await supabase.from('order_logs').insert({
-          order_id: id,
-          action: 'photo_analysis',
-          details: { updates },
-          created_at: new Date().toISOString(),
-        });
-
-        await fetchOrder();
+          await fetchOrder();
+        }
       }
 
       // Upload photo to media
@@ -443,9 +419,7 @@ export default function OrderDetail() {
       await fetchMedia();
 
       // TTS response
-      const response = analysis.spoken_response || 'Fotoğraf kaydedildi';
-      console.log('🔊 Sipariş görsel TTS:', response);
-      await speakText(response);
+      await speakText('Fotoğraf analiz edildi ve kaydedildi');
 
       setStatusText('');
       setIsAnalyzing(false);
@@ -517,66 +491,36 @@ export default function OrderDetail() {
 
       if (result.canceled) return;
 
-      console.log('📁 Dosya boyut:', result.assets[0].size);
       setIsAnalyzing(true);
       setStatusText('Dosya analiz ediliyor...');
 
-      // Read file as base64
-      const base64 = await FileSystem.readAsStringAsync(result.assets[0].uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-
-      console.log('📁 Base64 boyut:', base64.length);
-
-      // AI analysis
-      const { analyzeImageForCard } = await import('@/lib/ai');
-      const analysis = await analyzeImageForCard(
-        base64,
-        'order',
-        order || {}
-      );
-
-      console.log('🧠 Sipariş dosya analiz:', analysis);
+      // AI Vision analysis
+      const visionResult = await processVision(result.assets[0].uri, 'document');
+      console.log('🧠 Sipariş dosya analiz:', visionResult);
 
       // Auto-save updates
-      const updates: any = {};
+      if (visionResult?.result && typeof visionResult.result === 'object') {
+        const updates: any = { ...visionResult.result };
 
-      // Handle details_append
-      if (analysis.details_append) {
-        const currentDetails = order?.details || '';
-        const newDetails = currentDetails
-          ? `${currentDetails}\n\n${analysis.details_append}`
-          : analysis.details_append;
-        updates.details = newDetails;
-      }
+        if (Object.keys(updates).length > 0) {
+          const { error } = await supabase
+            .from('orders')
+            .update(updates)
+            .eq('id', id);
 
-      // Handle other updates
-      if (analysis.updates && Object.keys(analysis.updates).length > 0) {
-        Object.entries(analysis.updates).forEach(([key, value]) => {
-          if (value !== null && value !== undefined) {
-            updates[key] = value;
-          }
-        });
-      }
+          if (error) throw error;
 
-      if (Object.keys(updates).length > 0) {
-        const { error } = await supabase
-          .from('orders')
-          .update(updates)
-          .eq('id', id);
+          console.log('💾 Sipariş dosyadan güncellendi:', updates);
 
-        if (error) throw error;
+          await supabase.from('order_logs').insert({
+            order_id: id,
+            action: 'file_analysis',
+            details: { updates },
+            created_at: new Date().toISOString(),
+          });
 
-        console.log('💾 Sipariş dosyadan güncellendi:', updates);
-
-        await supabase.from('order_logs').insert({
-          order_id: id,
-          action: 'file_analysis',
-          details: { updates },
-          created_at: new Date().toISOString(),
-        });
-
-        await fetchOrder();
+          await fetchOrder();
+        }
       }
 
       // Upload file to media
@@ -609,9 +553,7 @@ export default function OrderDetail() {
       await fetchMedia();
 
       // TTS response
-      const response = analysis.spoken_response || 'Dosya kaydedildi';
-      console.log('🔊 Sipariş dosya TTS:', response);
-      await speakText(response);
+      await speakText('Belge analiz edildi ve kaydedildi');
 
       setStatusText('');
       setIsAnalyzing(false);

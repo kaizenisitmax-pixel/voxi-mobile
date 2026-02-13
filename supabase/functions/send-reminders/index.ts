@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Supabase Edge Function: send-reminders
 // Her sabah çalışır, bugünün hatırlatıcılarını bulur ve push notification gönderir
 

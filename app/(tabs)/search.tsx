@@ -1,174 +1,269 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
-  StyleSheet,
-  ScrollView,
   TouchableOpacity,
-  TextInput,
+  ScrollView,
+  StyleSheet,
+  Image,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { getWorkspaceInfo } from '../../lib/workspace';
+import { router } from 'expo-router';
+import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../contexts/AuthContext';
 
-interface Tool {
-  id: string;
-  icon: string;
-  title: string;
-  description: string;
-  route: string;
-  adminOnly?: boolean;
+interface Stats {
+  totalDesigns: number;
+  completedJobs: number;
+  rating: number;
+  totalJobs: number;
 }
 
-export default function SearchScreen() {
-  const router = useRouter();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [userRole, setUserRole] = useState<string>('member');
+export default function ProfileScreen() {
+  const { session, profile, signOut } = useAuth();
+  const [userRole, setUserRole] = useState<'customer' | 'master' | 'both'>('customer');
+  const [stats, setStats] = useState<Stats>({
+    totalDesigns: 0,
+    completedJobs: 0,
+    rating: 0,
+    totalJobs: 0,
+  });
+  const [isMaster, setIsMaster] = useState(false);
 
-  React.useEffect(() => {
-    loadUserRole();
+  useEffect(() => {
+    loadUserData();
   }, []);
 
-  const loadUserRole = async () => {
-    const wsInfo = await getWorkspaceInfo();
-    if (wsInfo) setUserRole(wsInfo.role);
+  const loadUserData = async () => {
+    if (!session?.user?.id) return;
+
+    try {
+      // Load user role
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', session.user.id)
+        .single();
+
+      const role = profileData?.role || 'customer';
+      setUserRole(role);
+      setIsMaster(role === 'master' || role === 'both');
+
+      // Load customer stats
+      const { count: designCount } = await supabase
+        .from('designs')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', session.user.id);
+
+      // Load master stats if applicable
+      if (role === 'master' || role === 'both') {
+        const { data: masterData } = await supabase
+          .from('masters')
+          .select('rating, total_jobs, completed_jobs')
+          .eq('user_id', session.user.id)
+          .single();
+
+        setStats({
+          totalDesigns: designCount || 0,
+          completedJobs: masterData?.completed_jobs || 0,
+          rating: masterData?.rating || 0,
+          totalJobs: masterData?.total_jobs || 0,
+        });
+      } else {
+        setStats({
+          totalDesigns: designCount || 0,
+          completedJobs: 0,
+          rating: 0,
+          totalJobs: 0,
+        });
+      }
+    } catch (error) {
+      console.error('❌ Kullanıcı verileri yüklenemedi:', error);
+    }
   };
 
-  const tools: Tool[] = [
-    {
-      id: 'search',
-      icon: 'search-outline',
-      title: 'Detaylı Arama',
-      description: 'Müşteri, görev, belge, fotoğraf, ekip...',
-      route: '/search/detailed',
-    },
-    {
-      id: 'customer',
-      icon: 'person-add-outline',
-      title: 'Müşteri Ekle',
-      description: 'Kartvizit, vergi levhası, sesle veya manuel',
-      route: '/customer/new',
-    },
-    {
-      id: 'order',
-      icon: 'cube-outline',
-      title: 'Sipariş Gir',
-      description: 'Trendyol, Hepsiburada, WhatsApp, telefon',
-      route: '/order/new',
-    },
-    {
-      id: 'proposal',
-      icon: 'document-text-outline',
-      title: 'Teklif Hazırla',
-      description: 'Müşteriye fiyat teklifi oluştur ve gönder',
-      route: '/proposal/new',
-    },
-    {
-      id: 'invoice',
-      icon: 'receipt-outline',
-      title: 'Fatura / Tahsilat',
-      description: 'Fatura kes, ödeme kaydet, bakiye sorgula',
-      route: '/invoice/new',
-    },
-    {
-      id: 'research',
-      icon: 'globe-outline',
-      title: 'Araştır',
-      description: 'Rakip, pazar, fiyat araştırması',
-      route: '/research/new',
-    },
-    {
-      id: 'report',
-      icon: 'stats-chart-outline',
-      title: 'Rapor Al',
-      description: 'Satış, ekip, performans raporları',
-      route: '/reports',
-      adminOnly: true,
-    },
-  ];
+  const handleRegisterAsMaster = () => {
+    router.push('/master/register');
+  };
 
-  const filteredTools = tools.filter(tool => {
-    // Admin only kontrolü
-    if (tool.adminOnly && userRole !== 'owner' && userRole !== 'admin') {
-      return false;
-    }
-    // Arama filtresi
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      return (
-        tool.title.toLowerCase().includes(query) ||
-        tool.description.toLowerCase().includes(query)
-      );
-    }
-    return true;
-  });
-
-  const handleToolPress = (tool: Tool) => {
-    router.push(tool.route as any);
+  const handleSignOut = async () => {
+    Alert.alert('Çıkış Yap', 'Çıkış yapmak istediğinize emin misiniz?', [
+      { text: 'İptal', style: 'cancel' },
+      {
+        text: 'Çıkış Yap',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await signOut();
+            router.replace('/(auth)/welcome');
+          } catch (error) {
+            console.error('❌ Çıkış hatası:', error);
+          }
+        },
+      },
+    ]);
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Araçlar</Text>
-      </View>
-
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Hızlı Arama */}
-        <View style={styles.searchContainer}>
-          <Ionicons name="search-outline" size={20} color="#8E8E93" style={styles.searchIcon} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Araç ara..."
-            placeholderTextColor="#8E8E93"
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <Ionicons name="close-circle" size={20} color="#8E8E93" />
-            </TouchableOpacity>
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Profile Header */}
+        <View style={styles.profileHeader}>
+          <View style={styles.profileImageContainer}>
+            <Image
+              source={{
+                uri:
+                  session?.user?.user_metadata?.avatar_url ||
+                  'https://ui-avatars.com/api/?name=' +
+                    encodeURIComponent(profile?.full_name || 'User'),
+              }}
+              style={styles.profileImage}
+              resizeMode="cover"
+            />
+          </View>
+          <Text style={styles.profileName}>{profile?.full_name || 'Kullanıcı'}</Text>
+          <Text style={styles.profileEmail}>{session?.user?.email}</Text>
+          {isMaster && (
+            <View style={styles.masterBadge}>
+              <Ionicons name="hammer" size={16} color="#FFFFFF" />
+              <Text style={styles.masterBadgeText}>Usta</Text>
+            </View>
           )}
         </View>
 
-        {/* Araçlar Listesi */}
-        <View style={styles.toolsContainer}>
-          {filteredTools.map((tool) => (
-            <TouchableOpacity
-              key={tool.id}
-              style={styles.toolCard}
-              onPress={() => handleToolPress(tool)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.toolIconContainer}>
-                <Ionicons name={tool.icon as any} size={24} color="#1A1A1A" />
+        {/* Stats */}
+        <View style={styles.statsContainer}>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{stats.totalDesigns}</Text>
+            <Text style={styles.statLabel}>Tasarım</Text>
+          </View>
+          {isMaster && (
+            <>
+              <View style={styles.statCard}>
+                <Text style={styles.statValue}>{stats.totalJobs}</Text>
+                <Text style={styles.statLabel}>Toplam İş</Text>
               </View>
-              <View style={styles.toolContent}>
-                <View style={styles.toolTitleRow}>
-                  <Text style={styles.toolTitle}>{tool.title}</Text>
-                  {tool.adminOnly && (
-                    <View style={styles.adminBadge}>
-                      <Ionicons name="shield-checkmark" size={12} color="#8E8E93" />
-                    </View>
-                  )}
-                </View>
-                <Text style={styles.toolDescription}>{tool.description}</Text>
+              <View style={styles.statCard}>
+                <Text style={styles.statValue}>
+                  {stats.rating > 0 ? stats.rating.toFixed(1) : '-'}
+                </Text>
+                <Text style={styles.statLabel}>Puan</Text>
               </View>
-              <Ionicons name="chevron-forward" size={20} color="#C7C7CC" />
-            </TouchableOpacity>
-          ))}
+            </>
+          )}
         </View>
 
-        {filteredTools.length === 0 && (
-          <View style={styles.emptyState}>
-            <Ionicons name="search-outline" size={48} color="#E5E5EA" />
-            <Text style={styles.emptyText}>Araç bulunamadı</Text>
+        {/* Register as Master */}
+        {!isMaster && (
+          <View style={styles.section}>
+            <TouchableOpacity
+              style={styles.registerMasterCard}
+              onPress={handleRegisterAsMaster}
+              activeOpacity={0.8}
+            >
+              <View style={styles.registerMasterIcon}>
+                <Ionicons name="hammer" size={32} color="#212121" />
+              </View>
+              <View style={styles.registerMasterContent}>
+                <Text style={styles.registerMasterTitle}>Usta Olarak Kaydol</Text>
+                <Text style={styles.registerMasterSubtitle}>
+                  Sesli komutla hızlıca kayıt olun ve iş almaya başlayın
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={24} color="#8E8E93" />
+            </TouchableOpacity>
           </View>
         )}
 
-        <View style={{ height: 40 }} />
+        {/* Menu Items */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Ayarlar</Text>
+
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => {
+              Alert.alert('Bildirimler', 'Yakında aktif olacak!');
+            }}
+          >
+            <Ionicons name="notifications-outline" size={24} color="#212121" />
+            <Text style={styles.menuItemText}>Bildirimler</Text>
+            <Ionicons name="chevron-forward" size={20} color="#8E8E93" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => {
+              Alert.alert('Dil', 'Şu an sadece Türkçe desteklenmektedir');
+            }}
+          >
+            <Ionicons name="language-outline" size={24} color="#212121" />
+            <Text style={styles.menuItemText}>Dil</Text>
+            <Ionicons name="chevron-forward" size={20} color="#8E8E93" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => {
+              Alert.alert('Tema', 'Yakında aktif olacak!');
+            }}
+          >
+            <Ionicons name="moon-outline" size={24} color="#212121" />
+            <Text style={styles.menuItemText}>Tema</Text>
+            <Ionicons name="chevron-forward" size={20} color="#8E8E93" />
+          </TouchableOpacity>
+        </View>
+
+        {/* About */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Hakkında</Text>
+
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => {
+              Alert.alert('Gizlilik Politikası', 'Yakında aktif olacak!');
+            }}
+          >
+            <Ionicons name="shield-checkmark-outline" size={24} color="#212121" />
+            <Text style={styles.menuItemText}>Gizlilik Politikası</Text>
+            <Ionicons name="chevron-forward" size={20} color="#8E8E93" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => {
+              Alert.alert('Kullanım Koşulları', 'Yakında aktif olacak!');
+            }}
+          >
+            <Ionicons name="document-text-outline" size={24} color="#212121" />
+            <Text style={styles.menuItemText}>Kullanım Koşulları</Text>
+            <Ionicons name="chevron-forward" size={20} color="#8E8E93" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => {
+              Alert.alert('evim.ai', 'Versiyon: 1.0.0\n\nAI ile oda tasarımı ve usta bulma platformu');
+            }}
+          >
+            <Ionicons name="information-circle-outline" size={24} color="#212121" />
+            <Text style={styles.menuItemText}>Uygulama Hakkında</Text>
+            <Ionicons name="chevron-forward" size={20} color="#8E8E93" />
+          </TouchableOpacity>
+        </View>
+
+        {/* Sign Out */}
+        <View style={styles.section}>
+          <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
+            <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
+            <Text style={styles.signOutText}>Çıkış Yap</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -177,98 +272,155 @@ export default function SearchScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FAF9F6',
+    backgroundColor: '#F5F3EF',
   },
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 16,
+  scrollView: {
+    flex: 1,
   },
-  headerTitle: {
+  scrollContent: {
+    paddingBottom: 32,
+  },
+  profileHeader: {
+    alignItems: 'center',
+    paddingVertical: 32,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5EA',
+  },
+  profileImageContainer: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    overflow: 'hidden',
+    marginBottom: 16,
+  },
+  profileImage: {
+    width: '100%',
+    height: '100%',
+  },
+  profileName: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#1A1A1A',
+    marginBottom: 4,
+  },
+  profileEmail: {
+    fontSize: 15,
+    color: '#8E8E93',
+  },
+  masterBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#212121',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    marginTop: 12,
+  },
+  masterBadgeText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  statsContainer: {
+    flexDirection: 'row',
+    paddingVertical: 24,
+    paddingHorizontal: 16,
+    backgroundColor: '#FFFFFF',
+    gap: 16,
+  },
+  statCard: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 16,
+    backgroundColor: '#F5F3EF',
+    borderRadius: 12,
+  },
+  statValue: {
     fontSize: 28,
     fontWeight: '700',
     color: '#1A1A1A',
+    marginBottom: 4,
   },
-  content: {
-    flex: 1,
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    marginHorizontal: 20,
-    marginBottom: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-  },
-  searchIcon: {
-    marginRight: 10,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 16,
-    color: '#1A1A1A',
-  },
-  toolsContainer: {
-    paddingHorizontal: 20,
-  },
-  toolCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-  },
-  toolIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    backgroundColor: '#F5F3EF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  toolContent: {
-    flex: 1,
-    marginLeft: 14,
-    marginRight: 8,
-  },
-  toolTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  toolTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1A1A1A',
-  },
-  adminBadge: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#F5F3EF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  toolDescription: {
+  statLabel: {
     fontSize: 13,
     color: '#8E8E93',
-    marginTop: 4,
-    lineHeight: 18,
   },
-  emptyState: {
+  section: {
+    marginTop: 24,
+  },
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#1A1A1A',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
+  registerMasterCard: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 60,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingVertical: 20,
+    marginHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
   },
-  emptyText: {
-    fontSize: 15,
+  registerMasterIcon: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#F5F3EF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  registerMasterContent: {
+    flex: 1,
+    marginLeft: 16,
+  },
+  registerMasterTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#1A1A1A',
+    marginBottom: 4,
+  },
+  registerMasterSubtitle: {
+    fontSize: 14,
     color: '#8E8E93',
-    marginTop: 12,
+    lineHeight: 20,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5EA',
+  },
+  menuItemText: {
+    flex: 1,
+    fontSize: 16,
+    color: '#1A1A1A',
+    marginLeft: 16,
+  },
+  signOutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    paddingVertical: 16,
+    marginHorizontal: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#FF3B30',
+  },
+  signOutText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FF3B30',
   },
 });

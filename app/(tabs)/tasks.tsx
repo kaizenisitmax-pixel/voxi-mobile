@@ -1,419 +1,254 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
-  StyleSheet,
-  ScrollView,
   TouchableOpacity,
+  ScrollView,
+  StyleSheet,
+  Image,
   RefreshControl,
-  ActionSheetIOS,
-  Platform,
   Alert,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
-import { getWorkspaceInfo } from '../../lib/workspace';
+import { useAuth } from '../../contexts/AuthContext';
+import MasterList from '../../components/master/MasterList';
+import * as Haptics from 'expo-haptics';
+import { router } from 'expo-router';
 
-interface Task {
+const { width } = Dimensions.get('window');
+const CARD_WIDTH = (width - 48) / 2; // 2 columns with padding
+
+interface Design {
   id: string;
-  title: string;
-  status: string;
-  priority: string;
-  assigned_to: string;
-  due_date: string | null;
+  user_id: string;
+  original_image_url: string;
+  ai_image_url: string;
+  category: string;
+  style: string;
+  tool: string;
+  room_type: string | null;
+  processing_status: 'processing' | 'completed' | 'failed';
+  is_favorite: boolean;
   created_at: string;
-  customer_id: string | null;
-  message_count?: number;
-  attachment_count?: number;
 }
 
-interface GroupedTasks {
-  [key: string]: Task[];
-}
-
-export default function TasksScreen() {
-  const router = useRouter();
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
+export default function LibraryScreen() {
+  const { session } = useAuth();
+  const [designs, setDesigns] = useState<Design[]>([]);
   const [refreshing, setRefreshing] = useState(false);
-  const [userRole, setUserRole] = useState<string>('member');
-  const [urgentCount, setUrgentCount] = useState(0);
-  const [showUrgentCard, setShowUrgentCard] = useState(true);
-  const [activeFilter, setActiveFilter] = useState('Tümü');
+  const [loading, setLoading] = useState(true);
+  const [selectedDesign, setSelectedDesign] = useState<Design | null>(null);
+  const [showMasterList, setShowMasterList] = useState(false);
 
-  useEffect(() => {
-    loadTasks();
-  }, []);
+  // Long press tracking
+  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+  const [isLongPressing, setIsLongPressing] = useState(false);
 
-  const loadTasks = async () => {
+  // Load designs
+  const loadDesigns = async () => {
+    if (!session?.user?.id) return;
+
     try {
-      const wsInfo = await getWorkspaceInfo();
-      if (!wsInfo) return;
-
-      setUserRole(wsInfo.role);
-
-      // Sadece bana atanan görevler
       const { data, error } = await supabase
-        .from('tasks')
+        .from('designs')
         .select('*')
-        .eq('workspace_id', wsInfo.workspaceId)
-        .eq('assigned_to', wsInfo.fullName)
-        .neq('status', 'done')
+        .eq('user_id', session.user.id)
+        .eq('processing_status', 'completed')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
 
-      // Her görev için mesaj ve dosya sayısı çek
-      const tasksWithCounts = await Promise.all(
-        (data || []).map(async (task) => {
-          const [msgRes, attachRes] = await Promise.all([
-            supabase.from('messages').select('id', { count: 'exact', head: true }).eq('task_id', task.id),
-            supabase.from('attachments').select('id', { count: 'exact', head: true }).eq('task_id', task.id),
-          ]);
-          return {
-            ...task,
-            message_count: msgRes.count || 0,
-            attachment_count: attachRes.count || 0,
-          };
-        })
-      );
-
-      setTasks(tasksWithCounts);
-      setUrgentCount(tasksWithCounts.filter(t => t.priority === 'urgent').length);
-    } catch (err) {
-      console.error('Görevler yüklenemedi:', err);
+      setDesigns(data || []);
+    } catch (error) {
+      console.error('❌ Tasarımlar yüklenemedi:', error);
+      Alert.alert('Hata', 'Tasarımlar yüklenirken bir sorun oluştu');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  const onRefresh = () => {
+  useEffect(() => {
+    loadDesigns();
+  }, []);
+
+  // Refresh when screen is focused
+  useFocusEffect(
+    useCallback(() => {
+      loadDesigns();
+    }, [])
+  );
+
+  const handleRefresh = () => {
     setRefreshing(true);
-    loadTasks();
+    loadDesigns();
   };
 
-  const groupTasksByDate = (tasks: Task[]): GroupedTasks => {
-    const groups: GroupedTasks = {};
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-
-    tasks.forEach(task => {
-      const taskDate = new Date(task.created_at);
-      let key: string;
-
-      if (taskDate.toDateString() === today.toDateString()) {
-        key = 'Bugün';
-      } else if (taskDate.toDateString() === yesterday.toDateString()) {
-        key = 'Dün';
-      } else {
-        const month = taskDate.toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' });
-        key = month.charAt(0).toUpperCase() + month.slice(1);
-      }
-
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(task);
-    });
-
-    return groups;
+  // Short press: Open before/after view
+  const handleCardPress = (design: Design) => {
+    // Navigate to design detail page
+    router.push(`/design/${design.id}`);
   };
 
-  const showTaskMenu = (task: Task) => {
-    const isManager = userRole === 'owner' || userRole === 'admin';
+  // Long press start: Show pulse animation + find masters
+  const handleLongPressStart = (design: Design) => {
+    longPressTimer.current = setTimeout(() => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      setIsLongPressing(true);
+      handleFindMasters(design);
+    }, 500); // 500ms for long press
+  };
 
-    const options = [
-      'Tamamla',
-      'Not ekle',
-      'Dosya ekle',
-      'Hatırlatıcı kur',
-      'Detaylar',
-      'Müşteri kartı',
-    ];
-
-    if (isManager) {
-      options.push('Düzenle', 'Başkasına aktar');
+  // Long press end
+  const handleLongPressEnd = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
     }
+    setIsLongPressing(false);
+  };
 
-    options.push('Sorun bildir', 'İptal');
+  // Find nearby masters
+  const handleFindMasters = async (design: Design) => {
+    try {
+      setSelectedDesign(design);
+      setShowMasterList(true);
+    } catch (error) {
+      console.error('❌ Usta bulma hatası:', error);
+    } finally {
+      setIsLongPressing(false);
+    }
+  };
 
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options,
-          cancelButtonIndex: options.length - 1,
-          destructiveButtonIndex: options.indexOf('Sorun bildir'),
-          title: task.title,
-        },
-        (buttonIndex) => handleMenuAction(task, options[buttonIndex])
+  // Toggle favorite
+  const toggleFavorite = async (design: Design) => {
+    try {
+      const { error } = await supabase
+        .from('designs')
+        .update({ is_favorite: !design.is_favorite })
+        .eq('id', design.id);
+
+      if (error) throw error;
+
+      // Update local state
+      setDesigns(prev =>
+        prev.map(d =>
+          d.id === design.id ? { ...d, is_favorite: !d.is_favorite } : d
+        )
       );
-    } else {
-      Alert.alert(task.title, 'Ne yapmak istiyorsunuz?', 
-        options.map(opt => ({
-          text: opt,
-          onPress: () => handleMenuAction(task, opt),
-          style: opt === 'İptal' ? 'cancel' : opt === 'Sorun bildir' ? 'destructive' : 'default',
-        }))
-      );
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      console.error('❌ Favori güncelleme hatası:', error);
     }
   };
-
-  const handleMenuAction = async (task: Task, action: string) => {
-    switch (action) {
-      case 'Tamamla':
-        await supabase.from('tasks').update({ status: 'done' }).eq('id', task.id);
-        loadTasks();
-        break;
-      case 'Detaylar':
-        router.push(`/task/${task.id}`);
-        break;
-      case 'Müşteri kartı':
-        if (task.customer_id) router.push(`/customer/${task.customer_id}`);
-        break;
-      case 'Sorun bildir':
-        Alert.alert('Sorun Bildir', 'Yöneticiye bu görevi aktarması için bildirim gönderilsin mi?', [
-          { text: 'İptal', style: 'cancel' },
-          { text: 'Gönder', onPress: () => reportIssue(task) },
-        ]);
-        break;
-      // Diğer aksiyonlar eklenebilir
-    }
-  };
-
-  const reportIssue = async (task: Task) => {
-    // Yöneticiye bildirim gönder
-    const wsInfo = await getWorkspaceInfo();
-    if (!wsInfo) return;
-
-    await supabase.from('notifications').insert({
-      user_id: wsInfo.userId, // TODO: Yönetici user_id olmalı
-      workspace_id: wsInfo.workspaceId,
-      type: 'issue',
-      title: 'Görev sorunu bildirildi',
-      body: `${wsInfo.fullName}: "${task.title}" görevi için yardım istiyor`,
-      data: { taskId: task.id },
-      is_read: false,
-      sent_at: new Date().toISOString(),
-    });
-
-    Alert.alert('Gönderildi', 'Yöneticinize bildirim gönderildi.');
-  };
-
-  const formatTime = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
-  };
-
-  const getFilteredTasks = () => {
-    let filtered = tasks;
-    const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
-    const weekStart = new Date(today);
-    weekStart.setDate(today.getDate() - today.getDay());
-
-    switch (activeFilter) {
-      case 'Acil':
-        filtered = tasks.filter(t => t.priority === 'urgent');
-        break;
-      case 'Bugün':
-        filtered = tasks.filter(t => t.due_date?.startsWith(todayStr));
-        break;
-      case 'Bu hafta':
-        filtered = tasks.filter(t => {
-          if (!t.due_date) return false;
-          const taskDate = new Date(t.due_date);
-          return taskDate >= weekStart;
-        });
-        break;
-      case 'Bekleyen':
-        filtered = tasks.filter(t => t.status === 'open');
-        break;
-    }
-    return filtered;
-  };
-
-  const groupedTasks = groupTasksByDate(getFilteredTasks());
-  const filters = ['Tümü', 'Acil', 'Bugün', 'Bu hafta', 'Bekleyen'];
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>Görevler</Text>
-          <Text style={styles.headerSubtitle}>{tasks.length} görev</Text>
-        </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity 
-            style={styles.headerButton}
-            onPress={() => router.push('/customer/new')}
-          >
-            <Ionicons name="business-outline" size={20} color="#1A1A1A" />
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={styles.headerButton}
-            onPress={() => router.push('/order/new')}
-          >
-            <Ionicons name="receipt-outline" size={20} color="#1A1A1A" />
-          </TouchableOpacity>
-        </View>
+        <Text style={styles.headerTitle}>Kütüphane</Text>
+        <Text style={styles.headerSubtitle}>
+          {designs.length} tasarım
+        </Text>
       </View>
 
-      {/* Filtre Chips */}
-      <ScrollView 
-        horizontal 
-        showsHorizontalScrollIndicator={false} 
-        style={styles.filterScroll}
-        contentContainerStyle={styles.filterContainer}
-      >
-        {filters.map((filter) => (
-          <TouchableOpacity
-            key={filter}
-            style={[
-              styles.filterChip,
-              activeFilter === filter && styles.filterChipActive
-            ]}
-            onPress={() => setActiveFilter(filter)}
-          >
-            <Text style={[
-              styles.filterChipText,
-              activeFilter === filter && styles.filterChipTextActive
-            ]}>
-              {filter}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
+      {/* Designs Grid */}
       <ScrollView
-        style={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#1A1A1A" />}
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+        }
       >
-        {/* Acil Görevler Kartı */}
-        {urgentCount > 0 && showUrgentCard && (
-          <View style={styles.urgentCard}>
-            <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                <Ionicons name="alert-circle" size={20} color="#FF3B30" style={{ marginRight: 8 }} />
-                <Text style={styles.urgentTitle}>Acil Görevler</Text>
-              </View>
-              <Text style={styles.urgentSubtitle}>{urgentCount} görev bugün bitmeli</Text>
-              <TouchableOpacity 
-                style={styles.urgentButton}
-                onPress={() => setActiveFilter('Acil')}
-              >
-                <Text style={styles.urgentButtonText}>Şimdi Gör</Text>
-              </TouchableOpacity>
-            </View>
-            <TouchableOpacity onPress={() => setShowUrgentCard(false)} style={styles.urgentClose}>
-              <Ionicons name="close" size={20} color="#8E8E93" />
-            </TouchableOpacity>
+        {loading ? (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>Yükleniyor...</Text>
           </View>
-        )}
+        ) : designs.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Ionicons name="images-outline" size={64} color="#8E8E93" />
+            <Text style={styles.emptyTitle}>Henüz Tasarım Yok</Text>
+            <Text style={styles.emptySubtitle}>
+              "Tasarla" sekmesinden ilk tasarımınızı oluşturun
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.grid}>
+            {designs.map((design) => (
+              <TouchableOpacity
+                key={design.id}
+                style={[styles.card, isLongPressing && styles.cardPressing]}
+                onPress={() => handleCardPress(design)}
+                onLongPress={() => handleLongPressStart(design)}
+                onPressOut={handleLongPressEnd}
+                activeOpacity={0.8}
+              >
+                {/* AI Image */}
+                <Image
+                  source={{ uri: design.ai_image_url }}
+                  style={styles.cardImage}
+                  resizeMode="contain"
+                />
 
-        {/* Tarihsel Gruplar */}
-        {Object.entries(groupedTasks).map(([date, dateTasks]) => (
-          <View key={date} style={styles.dateGroup}>
-            <Text style={styles.dateTitle}>{date}</Text>
-            {dateTasks.map((task) => {
-              const initials = (task.assigned_to || '')
-                .split(' ')
-                .map(n => n[0])
-                .join('')
-                .toUpperCase()
-                .slice(0, 2) || '??';
-              
-              return (
+                {/* Favorite Badge */}
                 <TouchableOpacity
-                  key={task.id}
-                  style={styles.taskCard}
-                  onPress={() => router.push(`/task/${task.id}`)}
+                  style={styles.favoriteButton}
+                  onPress={() => toggleFavorite(design)}
                   activeOpacity={0.7}
                 >
-                  {/* Avatar - Baş harfler */}
-                  <View style={styles.taskAvatar}>
-                    <Text style={styles.taskAvatarText}>{initials}</Text>
-                  </View>
-
-                  {/* İçerik */}
-                  <View style={styles.taskContent}>
-                    {/* Üst satır - Başlık */}
-                    <View style={styles.taskTopRow}>
-                      <Text style={styles.taskTitle} numberOfLines={1}>{task.title}</Text>
-                      <TouchableOpacity 
-                        style={styles.taskMenu} 
-                        onPress={() => showTaskMenu(task)}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      >
-                        <Ionicons name="ellipsis-horizontal" size={18} color="#8E8E93" />
-                      </TouchableOpacity>
-                    </View>
-
-                    {/* Alt satır - Açıklama/Alt bilgi */}
-                    <Text style={styles.taskSubtitle} numberOfLines={1}>
-                      {task.assigned_to || 'Atanmamış'}
-                    </Text>
-
-                    {/* Ayırıcı çizgi */}
-                    <View style={styles.taskDivider} />
-
-                    {/* Meta bilgiler */}
-                    <View style={styles.taskFooter}>
-                      {/* Öncelik badge */}
-                      {task.priority === 'urgent' ? (
-                        <View style={styles.urgentBadge}>
-                          <Text style={styles.urgentBadgeText}>ACİL</Text>
-                        </View>
-                      ) : task.priority === 'normal' ? (
-                        <View style={styles.normalBadge}>
-                          <Text style={styles.normalBadgeText}>NORMAL</Text>
-                        </View>
-                      ) : null}
-
-                      {/* Tarih */}
-                      {task.due_date && (
-                        <View style={styles.metaItem}>
-                          <Ionicons name="calendar-outline" size={14} color="#8E8E93" />
-                          <Text style={styles.metaText}>
-                            {new Date(task.due_date).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' })}
-                          </Text>
-                        </View>
-                      )}
-
-                      {/* Mesaj sayısı */}
-                      {task.message_count && task.message_count > 0 && (
-                        <View style={styles.metaItem}>
-                          <Ionicons name="chatbubble-outline" size={14} color="#8E8E93" />
-                          <Text style={styles.metaText}>{task.message_count}</Text>
-                        </View>
-                      )}
-
-                      {/* Dosya sayısı */}
-                      {task.attachment_count && task.attachment_count > 0 && (
-                        <View style={styles.metaItem}>
-                          <Ionicons name="attach-outline" size={14} color="#8E8E93" />
-                          <Text style={styles.metaText}>{task.attachment_count}</Text>
-                        </View>
-                      )}
-                    </View>
-                  </View>
+                  <Ionicons
+                    name={design.is_favorite ? 'heart' : 'heart-outline'}
+                    size={20}
+                    color={design.is_favorite ? '#FF3B30' : '#FFFFFF'}
+                  />
                 </TouchableOpacity>
-              );
-            })}
-          </View>
-        ))}
 
-        {tasks.length === 0 && !loading && (
-          <View style={styles.emptyState}>
-            <Ionicons name="checkmark-circle-outline" size={48} color="#E5E5EA" />
-            <Text style={styles.emptyText}>Tüm görevler tamamlandı</Text>
+                {/* Style Badge */}
+                <View style={styles.styleBadge}>
+                  <Text style={styles.styleBadgeText}>{design.style}</Text>
+                </View>
+
+                {/* Info */}
+                <View style={styles.cardInfo}>
+                  <Text style={styles.cardDate}>
+                    {new Date(design.created_at).toLocaleDateString('tr-TR', {
+                      day: 'numeric',
+                      month: 'short',
+                    })}
+                  </Text>
+                </View>
+
+                {/* Long Press Hint */}
+                {isLongPressing && (
+                  <View style={styles.longPressHint}>
+                    <Ionicons name="hammer" size={24} color="#FFFFFF" />
+                    <Text style={styles.longPressText}>Usta Bul</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            ))}
           </View>
         )}
-
-        <View style={{ height: 40 }} />
       </ScrollView>
+
+      {/* Master List Modal */}
+      {selectedDesign && (
+        <MasterList
+          visible={showMasterList}
+          designId={selectedDesign.id}
+          onClose={() => setShowMasterList(false)}
+          onSelectMaster={(master) => {
+            console.log('✅ Usta seçildi:', master.name);
+            // TODO: Navigate to chat
+          }}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -421,218 +256,121 @@ export default function TasksScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FAF9F6',
+    backgroundColor: '#F5F3EF',
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5EA',
+    backgroundColor: '#FFFFFF',
   },
   headerTitle: {
     fontSize: 28,
     fontWeight: '700',
     color: '#1A1A1A',
-  },
-  headerSubtitle: {
-    fontSize: 14,
-    color: '#8E8E93',
-    marginTop: 2,
-  },
-  headerActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  headerButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-  },
-  content: {
-    flex: 1,
-  },
-  filterScroll: {
-    maxHeight: 50,
-    marginBottom: 16,
-  },
-  filterContainer: {
-    paddingHorizontal: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  filterChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-    height: 36,
-    justifyContent: 'center',
-  },
-  filterChipActive: {
-    backgroundColor: '#1A1A1A',
-    borderColor: '#1A1A1A',
-  },
-  filterChipText: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: '#3C3C43',
-  },
-  filterChipTextActive: {
-    color: '#FFFFFF',
-  },
-  urgentCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: '#FFF5F5',
-    marginHorizontal: 20,
-    marginBottom: 20,
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#FFDDDD',
-  },
-  urgentTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#1A1A1A',
-  },
-  urgentSubtitle: {
-    fontSize: 13,
-    color: '#FF3B30',
-    marginTop: 2,
-    marginBottom: 12,
-  },
-  urgentButton: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: '#1A1A1A',
-  },
-  urgentButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
-  urgentClose: {
-    padding: 4,
-  },
-  dateGroup: {
-    marginBottom: 24,
-  },
-  dateTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#1A1A1A',
-    marginLeft: 20,
-    marginBottom: 12,
-  },
-  taskCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: '#FFFFFF',
-    marginHorizontal: 20,
-    marginBottom: 8,
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-  },
-  taskAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#E5E5EA',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  taskAvatarText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#3C3C43',
-  },
-  taskContent: {
-    flex: 1,
-  },
-  taskTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     marginBottom: 4,
   },
-  taskTitle: {
+  headerSubtitle: {
     fontSize: 15,
-    fontWeight: '600',
-    color: '#1A1A1A',
+    color: '#8E8E93',
+  },
+  scrollView: {
     flex: 1,
   },
-  taskSubtitle: {
-    fontSize: 13,
-    color: '#8E8E93',
-    marginBottom: 12,
+  scrollContent: {
+    padding: 16,
   },
-  taskDivider: {
-    height: 1,
-    backgroundColor: '#F2F2F7',
-    marginBottom: 12,
-  },
-  taskFooter: {
+  grid: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
+    flexWrap: 'wrap',
+    gap: 16,
   },
-  urgentBadge: {
-    paddingHorizontal: 8,
+  card: {
+    width: CARD_WIDTH,
+    backgroundColor: '#F5F3EF', // Hafif gri arka plan
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 16,
+  },
+  cardPressing: {
+    opacity: 0.6,
+    transform: [{ scale: 0.95 }],
+  },
+  cardImage: {
+    width: '100%',
+    aspectRatio: 3 / 4, // 3:4 aspect ratio (portrait)
+  },
+  favoriteButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  styleBadge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 6,
-    backgroundColor: '#FF3B30',
   },
-  urgentBadgeText: {
+  styleBadgeText: {
     fontSize: 11,
     fontWeight: '600',
     color: '#FFFFFF',
+    textTransform: 'capitalize',
   },
-  normalBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: '#F5F3EF',
+  cardInfo: {
+    padding: 12,
   },
-  normalBadgeText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#3C3C43',
-  },
-  metaItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  metaText: {
-    fontSize: 12,
+  cardDate: {
+    fontSize: 13,
     color: '#8E8E93',
   },
-  taskMenu: {
-    padding: 4,
-  },
-  emptyState: {
+  longPressHint: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(33, 33, 33, 0.9)',
     alignItems: 'center',
-    paddingTop: 60,
+    justifyContent: 'center',
+    gap: 8,
   },
-  emptyText: {
+  longPressText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  emptyContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 80,
+    gap: 12,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#1A1A1A',
+  },
+  emptySubtitle: {
     fontSize: 15,
     color: '#8E8E93',
-    marginTop: 12,
+    textAlign: 'center',
+    paddingHorizontal: 40,
+    lineHeight: 22,
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#8E8E93',
   },
 });

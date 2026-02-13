@@ -1,3 +1,5 @@
+// @ts-nocheck
+// Supabase Edge Function: send-sms
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 
 const corsHeaders = {
