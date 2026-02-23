@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "VOXI",
+    "slug": "voxi-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "scheme": "voxi",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F5F3EF"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.voxi.mobile",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Ses kaydi ile not almak icin mikrofon erisimi gereklidir.",
+        "NSCameraUsageDescription": "Fotograf cekmek icin kamera erisimi gereklidir.",
+        "NSPhotoLibraryUsageDescription": "Galeriden fotograf secmek icin erisim gereklidir."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#F5F3EF"
+      },
+      "package": "com.voxi.mobile",
+      "permissions": [
+        "RECORD_AUDIO",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Ses kaydi icin mikrofon erisimi gereklidir."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Fotograf secmek icin galeri erisimi gereklidir.",
+          "cameraPermission": "Fotograf cekmek icin kamera erisimi gereklidir."
+        }
+      ]
+    ]
+  }
+}
