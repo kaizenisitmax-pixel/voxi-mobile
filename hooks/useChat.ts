@@ -46,26 +46,36 @@ export function useChat(cardId: string) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchMessages = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('card_messages')
-      .select('*')
-      .eq('card_id', cardId)
-      .order('created_at', { ascending: true });
+    setError(null);
 
-    if (error) {
-      console.error('[useChat] Fetch error:', error.message);
+    try {
+      const { data, error: fetchError } = await supabase
+        .from('card_messages')
+        .select('*')
+        .eq('card_id', cardId)
+        .order('created_at', { ascending: true });
+
+      if (fetchError) {
+        console.error('[useChat] Fetch error:', fetchError.message);
+        setError(fetchError.message);
+        setLoading(false);
+        return;
+      }
+
+      if (data) {
+        const enriched = await enrichWithProfiles(data);
+        setMessages(enriched);
+      }
+    } catch (err: any) {
+      console.error('[useChat] Exception:', err);
+      setError(err.message || 'Mesajlar yüklenemedi');
+    } finally {
       setLoading(false);
-      return;
     }
-
-    if (data) {
-      const enriched = await enrichWithProfiles(data);
-      setMessages(enriched);
-    }
-    setLoading(false);
   }, [cardId]);
 
   useEffect(() => {
@@ -97,22 +107,24 @@ export function useChat(cardId: string) {
 
   const sendMessage = async (content: string, type: string = 'text', extra: Partial<ChatMessage> = {}) => {
     try {
-      const { error } = await supabase.from('card_messages').insert({
+      const { error: sendError } = await supabase.from('card_messages').insert({
         card_id: cardId,
         user_id: user?.id,
         content,
         message_type: type,
         ...extra,
       });
-      if (error) {
-        console.error('[useChat] sendMessage error:', error);
+      if (sendError) {
+        console.error('[useChat] sendMessage error:', sendError);
+        setError(sendError.message);
       }
-      return { error };
-    } catch (err) {
+      return { error: sendError };
+    } catch (err: any) {
       console.error('[useChat] sendMessage exception:', err);
-      return { error: err as any };
+      setError(err.message || 'Mesaj gönderilemedi');
+      return { error: err };
     }
   };
 
-  return { messages, loading, sendMessage, fetchMessages };
+  return { messages, loading, error, sendMessage, fetchMessages };
 }

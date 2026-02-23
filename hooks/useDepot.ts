@@ -27,20 +27,31 @@ export function useDepot(cardId: string) {
   const { user } = useAuth();
   const [items, setItems] = useState<DepotItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [operationLoading, setOperationLoading] = useState(false);
 
   const fetchItems = useCallback(async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('card_depot_items')
-      .select('*')
-      .eq('card_id', cardId)
-      .order('pinned', { ascending: false })
-      .order('created_at', { ascending: false });
+    setError(null);
+    try {
+      const { data, error: fetchError } = await supabase
+        .from('card_depot_items')
+        .select('*')
+        .eq('card_id', cardId)
+        .order('pinned', { ascending: false })
+        .order('created_at', { ascending: false });
 
-    if (!error && data) {
-      setItems(data as DepotItem[]);
+      if (fetchError) {
+        setError(fetchError.message);
+      } else if (data) {
+        setItems(data as DepotItem[]);
+      }
+    } catch (err: any) {
+      console.error('[useDepot] Fetch error:', err);
+      setError(err.message || 'Depo öğeleri yüklenemedi');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [cardId]);
 
   useEffect(() => {
@@ -48,23 +59,66 @@ export function useDepot(cardId: string) {
   }, [fetchItems]);
 
   const addItem = async (data: Partial<DepotItem>) => {
-    const { error } = await supabase.from('card_depot_items').insert({
-      card_id: cardId,
-      created_by: user?.id,
-      ...data,
-    });
-    if (!error) fetchItems();
-    return { error };
+    setOperationLoading(true);
+    try {
+      const { error: addError } = await supabase.from('card_depot_items').insert({
+        card_id: cardId,
+        created_by: user?.id,
+        ...data,
+      });
+      if (addError) {
+        setError(addError.message);
+      } else {
+        fetchItems();
+      }
+      return { error: addError };
+    } catch (err: any) {
+      console.error('[useDepot] addItem error:', err);
+      setError(err.message || 'Öğe eklenemedi');
+      return { error: err };
+    } finally {
+      setOperationLoading(false);
+    }
   };
 
   const togglePin = async (itemId: string, pinned: boolean) => {
-    await supabase.from('card_depot_items').update({ pinned: !pinned }).eq('id', itemId);
-    fetchItems();
+    setOperationLoading(true);
+    try {
+      const { error: pinError } = await supabase
+        .from('card_depot_items')
+        .update({ pinned: !pinned })
+        .eq('id', itemId);
+      if (pinError) {
+        setError(pinError.message);
+      } else {
+        fetchItems();
+      }
+    } catch (err: any) {
+      console.error('[useDepot] togglePin error:', err);
+      setError(err.message || 'Pin durumu değiştirilemedi');
+    } finally {
+      setOperationLoading(false);
+    }
   };
 
   const deleteItem = async (itemId: string) => {
-    await supabase.from('card_depot_items').delete().eq('id', itemId);
-    fetchItems();
+    setOperationLoading(true);
+    try {
+      const { error: delError } = await supabase
+        .from('card_depot_items')
+        .delete()
+        .eq('id', itemId);
+      if (delError) {
+        setError(delError.message);
+      } else {
+        fetchItems();
+      }
+    } catch (err: any) {
+      console.error('[useDepot] deleteItem error:', err);
+      setError(err.message || 'Öğe silinemedi');
+    } finally {
+      setOperationLoading(false);
+    }
   };
 
   const mediaItems = items.filter(i => ['media', 'document'].includes(i.type));
@@ -73,7 +127,7 @@ export function useDepot(cardId: string) {
   const pinnedItems = items.filter(i => i.pinned);
 
   return {
-    items, loading, fetchItems, addItem, togglePin, deleteItem,
+    items, loading, error, operationLoading, fetchItems, addItem, togglePin, deleteItem,
     mediaItems, actionItems, commItems, pinnedItems,
   };
 }

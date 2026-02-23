@@ -26,42 +26,57 @@ export default function CardDetailScreen() {
   const [tab, setTab] = useState<Tab>('chat');
   const [card, setCard] = useState<Card | null>(null);
   const [cardLoading, setCardLoading] = useState(true);
+  const [cardError, setCardError] = useState<string | null>(null);
   const [members, setMembers] = useState<CardMember[]>([]);
   const [showAddMember, setShowAddMember] = useState(false);
 
   const fetchCard = async () => {
-    const { data } = await supabase
-      .from('cards')
-      .select(`
-        *,
-        customers(id, company_name, contact_name),
-        card_members(user_id, role)
-      `)
-      .eq('id', id)
-      .single();
+    setCardError(null);
+    try {
+      const { data, error: fetchError } = await supabase
+        .from('cards')
+        .select(`
+          *,
+          customers(id, company_name, contact_name, phone, email),
+          card_members(user_id, role)
+        `)
+        .eq('id', id)
+        .single();
 
-    if (data) {
-      const rawMembers: CardMember[] = (data as any).card_members || [];
-
-      const userIds = rawMembers.map(m => m.user_id);
-      if (userIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from('profiles')
-          .select('id, full_name')
-          .in('id', userIds);
-
-        const profileMap = new Map(
-          profiles?.map(p => [p.id, { full_name: p.full_name }]) || []
-        );
-        rawMembers.forEach(m => {
-          m.profiles = profileMap.get(m.user_id) || null;
-        });
+      if (fetchError) {
+        console.error('[CardDetail] Fetch error:', fetchError.message);
+        setCardError(fetchError.message);
+        setCardLoading(false);
+        return;
       }
 
-      setCard(data as Card);
-      setMembers(rawMembers);
+      if (data) {
+        const rawMembers: CardMember[] = (data as any).card_members || [];
+
+        const userIds = rawMembers.map(m => m.user_id);
+        if (userIds.length > 0) {
+          const { data: profiles } = await supabase
+            .from('profiles')
+            .select('id, full_name')
+            .in('id', userIds);
+
+          const profileMap = new Map(
+            profiles?.map(p => [p.id, { full_name: p.full_name }]) || []
+          );
+          rawMembers.forEach(m => {
+            m.profiles = profileMap.get(m.user_id) || null;
+          });
+        }
+
+        setCard(data as Card);
+        setMembers(rawMembers);
+      }
+    } catch (err: any) {
+      console.error('[CardDetail] Exception:', err);
+      setCardError(err.message || 'Kart yüklenemedi');
+    } finally {
+      setCardLoading(false);
     }
-    setCardLoading(false);
   };
 
   useEffect(() => { fetchCard(); }, [id]);
@@ -69,6 +84,31 @@ export default function CardDetailScreen() {
   const handleMembersChanged = () => {
     fetchCard();
   };
+
+  if (cardError) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
+          <Text style={{ fontSize: 48, marginBottom: 16 }}>⚠️</Text>
+          <Text style={{ fontSize: 18, fontWeight: '700', color: colors.dark, marginBottom: 8 }}>
+            Kart yüklenemedi
+          </Text>
+          <Text style={{ fontSize: 14, color: colors.muted, textAlign: 'center', marginBottom: 24 }}>
+            {cardError}
+          </Text>
+          <TouchableOpacity
+            style={{ backgroundColor: colors.dark, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 12 }}
+            onPress={() => { setCardLoading(true); fetchCard(); }}
+          >
+            <Text style={{ fontSize: 16, fontWeight: '600', color: '#FFF' }}>Tekrar Dene</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={{ marginTop: 16 }} onPress={() => router.back()}>
+            <Text style={{ fontSize: 16, color: colors.muted }}>Geri Dön</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (cardLoading || !card) {
     return (
@@ -325,9 +365,30 @@ function DepotTab({ cardId, card }: { cardId: string; card: Card }) {
         <ActionButton icon="📅" label="Hatirlatma Kur" onPress={() => {
           addItem({ type: 'reminder', title: 'Hatirlatma', metadata: { date: new Date().toISOString() } });
         }} />
-        <ActionButton icon="📧" label="E-posta Gonder" onPress={() => Linking.openURL('mailto:')} />
-        <ActionButton icon="💬" label="WhatsApp Gonder" onPress={() => Linking.openURL('whatsapp://')} />
-        <ActionButton icon="📱" label="SMS Gonder" onPress={() => Linking.openURL('sms:')} />
+        <ActionButton icon="📧" label="E-posta Gonder" onPress={() => {
+          const email = customer?.email;
+          if (email) {
+            Linking.openURL(`mailto:${email}`);
+          } else {
+            Alert.alert('Bilgi', 'Müşteri e-posta adresi bulunamadı');
+          }
+        }} />
+        <ActionButton icon="💬" label="WhatsApp Gonder" onPress={() => {
+          const phone = customer?.phone?.replace(/\s/g, '');
+          if (phone) {
+            Linking.openURL(`whatsapp://send?phone=${phone}`);
+          } else {
+            Alert.alert('Bilgi', 'Müşteri telefon numarası bulunamadı');
+          }
+        }} />
+        <ActionButton icon="📱" label="SMS Gonder" onPress={() => {
+          const phone = customer?.phone;
+          if (phone) {
+            Linking.openURL(`sms:${phone}`);
+          } else {
+            Alert.alert('Bilgi', 'Müşteri telefon numarası bulunamadı');
+          }
+        }} />
       </View>
 
       {/* History Section */}

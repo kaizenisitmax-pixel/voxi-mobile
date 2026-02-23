@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, Linking } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../contexts/AuthContext';
 import { colors } from '../../lib/colors';
@@ -76,8 +76,8 @@ export default function SettingsScreen() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Hesap</Text>
-          <SettingItem label="Profil Düzenle" />
-          <SettingItem label="Bildirim Tercihleri" />
+          <SettingItem label="Profil Düzenle" onPress={() => Alert.alert('Profil Düzenle', 'Bu özellik yakında gelecek.')} />
+          <SettingItem label="Bildirim Tercihleri" onPress={() => Alert.alert('Bildirim Tercihleri', 'Bu özellik yakında gelecek.')} />
         </View>
 
         <View style={styles.section}>
@@ -94,8 +94,8 @@ export default function SettingsScreen() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Yardım</Text>
-          <SettingItem label="Gizlilik Politikası" />
-          <SettingItem label="Kullanım Koşulları" />
+          <SettingItem label="Gizlilik Politikası" onPress={() => Linking.openURL('https://voxi.com.tr/privacy')} />
+          <SettingItem label="Kullanım Koşulları" onPress={() => Linking.openURL('https://voxi.com.tr/terms')} />
           <SettingItem label="Versiyon" value="1.0.0" />
         </View>
 
@@ -113,9 +113,9 @@ export default function SettingsScreen() {
   );
 }
 
-function SettingItem({ label, value }: { label: string; value?: string }) {
+function SettingItem({ label, value, onPress }: { label: string; value?: string; onPress?: () => void }) {
   return (
-    <TouchableOpacity style={styles.settingItem}>
+    <TouchableOpacity style={styles.settingItem} onPress={onPress}>
       <Text style={styles.settingLabel}>{label}</Text>
       <Text style={styles.settingValue}>{value || '→'}</Text>
     </TouchableOpacity>

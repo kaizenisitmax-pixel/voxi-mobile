@@ -28,7 +28,7 @@ export type Card = {
   unread_count: number;
   created_at: string;
   updated_at: string;
-  customers?: { id: string; company_name: string; contact_name: string | null } | null;
+  customers?: { id: string; company_name: string; contact_name: string | null; phone: string | null; email: string | null } | null;
   card_members?: CardMember[];
 };
 
@@ -36,57 +36,66 @@ export function useCards() {
   const { membership, user } = useAuth();
   const [cards, setCards] = useState<Card[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchCards = useCallback(async () => {
     if (!membership?.workspace_id) return;
     setLoading(true);
+    setError(null);
 
-    const { data, error } = await supabase
-      .from('cards')
-      .select(`
-        *,
-        customers(id, company_name, contact_name),
-        card_members(user_id, role)
-      `)
-      .eq('workspace_id', membership.workspace_id)
-      .neq('status', 'cancelled')
-      .order('last_message_at', { ascending: false });
+    try {
+      const { data, error: fetchError } = await supabase
+        .from('cards')
+        .select(`
+          *,
+          customers(id, company_name, contact_name, phone, email),
+          card_members(user_id, role)
+        `)
+        .eq('workspace_id', membership.workspace_id)
+        .neq('status', 'cancelled')
+        .order('last_message_at', { ascending: false });
 
-    if (error) {
-      console.error('[useCards] Fetch error:', error.message);
-      setLoading(false);
-      return;
-    }
-
-    if (data && data.length > 0) {
-      const allUserIds = new Set<string>();
-      data.forEach((card: any) => {
-        card.card_members?.forEach((m: any) => allUserIds.add(m.user_id));
-      });
-
-      if (allUserIds.size > 0) {
-        const { data: profiles } = await supabase
-          .from('profiles')
-          .select('id, full_name')
-          .in('id', Array.from(allUserIds));
-
-        const profileMap = new Map(
-          profiles?.map(p => [p.id, { full_name: p.full_name }]) || []
-        );
-
-        data.forEach((card: any) => {
-          card.card_members?.forEach((m: any) => {
-            m.profiles = profileMap.get(m.user_id) || null;
-          });
-        });
+      if (fetchError) {
+        console.error('[useCards] Fetch error:', fetchError.message);
+        setError(fetchError.message);
+        setLoading(false);
+        return;
       }
 
-      setCards(data as Card[]);
-    } else {
-      setCards([]);
-    }
+      if (data && data.length > 0) {
+        const allUserIds = new Set<string>();
+        data.forEach((card: any) => {
+          card.card_members?.forEach((m: any) => allUserIds.add(m.user_id));
+        });
 
-    setLoading(false);
+        if (allUserIds.size > 0) {
+          const { data: profiles } = await supabase
+            .from('profiles')
+            .select('id, full_name')
+            .in('id', Array.from(allUserIds));
+
+          const profileMap = new Map(
+            profiles?.map(p => [p.id, { full_name: p.full_name }]) || []
+          );
+
+          data.forEach((card: any) => {
+            card.card_members?.forEach((m: any) => {
+              m.profiles = profileMap.get(m.user_id) || null;
+            });
+          });
+        }
+
+        setCards(data as Card[]);
+      } else {
+        setCards([]);
+      }
+
+      setLoading(false);
+    } catch (err: any) {
+      console.error('[useCards] Exception:', err);
+      setError(err.message || 'Kartlar yüklenemedi');
+      setLoading(false);
+    }
   }, [membership?.workspace_id]);
 
   useEffect(() => {
@@ -150,5 +159,5 @@ export function useCards() {
     return { card, error };
   };
 
-  return { cards, loading, fetchCards, createCard };
+  return { cards, loading, error, fetchCards, createCard };
 }

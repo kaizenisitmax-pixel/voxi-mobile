@@ -1,6 +1,6 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, ScrollView } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, memo } from 'react';
 import { useCards, Card, CardMember } from '../../hooks/useCards';
 import { colors } from '../../lib/colors';
 import { getSelectedIndustry } from '../../lib/industryStore';
@@ -20,12 +20,12 @@ function getTimeAgo(date: string): string {
   const now = Date.now();
   const diff = now - new Date(date).getTime();
   const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'simdi';
+  if (mins < 1) return 'şimdi';
   if (mins < 60) return `${mins}dk`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}sa`;
   const days = Math.floor(hours / 24);
-  if (days === 1) return 'dun';
+  if (days === 1) return 'dün';
   if (days < 7) return `${days}g`;
   return new Date(date).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' });
 }
@@ -51,7 +51,7 @@ function MiniAvatar({ name, size, style }: { name: string; size: number; style?:
   );
 }
 
-function AvatarCluster({ members }: { members?: CardMember[] }) {
+const AvatarCluster = memo(function AvatarCluster({ members }: { members?: CardMember[] }) {
   const names = (members || [])
     .map(m => m.profiles?.full_name || '?')
     .filter(Boolean);
@@ -111,9 +111,9 @@ function AvatarCluster({ members }: { members?: CardMember[] }) {
       </View>
     </View>
   );
-}
+});
 
-function CardItem({ card, onPress }: { card: Card; onPress: () => void }) {
+const CardItem = memo(function CardItem({ card, onPress }: { card: Card; onPress: () => void }) {
   const dotColor = getPriorityDot(card.priority);
   const customerName = card.customers?.company_name;
   const memberCount = card.card_members?.length || 0;
@@ -124,7 +124,7 @@ function CardItem({ card, onPress }: { card: Card; onPress: () => void }) {
     .join(', ');
 
   return (
-    <TouchableOpacity style={styles.cardItem} onPress={onPress} activeOpacity={0.7}>
+    <TouchableOpacity style={styles.cardItem} onPress={onPress} activeOpacity={0.7} accessibilityLabel={`${card.title} kartını aç`}>
       <AvatarCluster members={card.card_members} />
 
       <View style={styles.cardContent}>
@@ -157,7 +157,7 @@ function CardItem({ card, onPress }: { card: Card; onPress: () => void }) {
       </View>
     </TouchableOpacity>
   );
-}
+});
 
 function QuickActions({ industry }: { industry: Industry | null }) {
   const router = useRouter();
@@ -186,7 +186,7 @@ function QuickActions({ industry }: { industry: Industry | null }) {
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { cards, loading, fetchCards } = useCards();
+  const { cards, loading, error, fetchCards } = useCards();
   const [industry, setIndustry] = useState<Industry | null>(null);
 
   useFocusEffect(
@@ -201,6 +201,12 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
+      {error && (
+        <TouchableOpacity style={styles.errorBanner} onPress={fetchCards}>
+          <Text style={styles.errorText}>⚠️ {error}</Text>
+          <Text style={styles.errorRetry}>Tekrar dene</Text>
+        </TouchableOpacity>
+      )}
       <FlatList
         data={openCards}
         keyExtractor={item => item.id}
@@ -213,6 +219,8 @@ export default function HomeScreen() {
         refreshControl={
           <RefreshControl refreshing={loading} onRefresh={fetchCards} tintColor={colors.dark} />
         }
+        removeClippedSubviews
+        maxToRenderPerBatch={10}
         ListHeaderComponent={<QuickActions industry={industry} />}
         ListEmptyComponent={
           !loading ? (
@@ -220,8 +228,14 @@ export default function HomeScreen() {
               <Text style={styles.emptyIcon}>💬</Text>
               <Text style={styles.emptyTitle}>Henüz kart yok</Text>
               <Text style={styles.emptyDesc}>
-                Sağ üstteki + butonuna tıklayarak{'\n'}ses kaydı, foto veya metin ile başlayın.
+                İlk kartınızı oluşturmak için{'\n'}aşağıdaki butona dokunun.
               </Text>
+              <TouchableOpacity
+                style={styles.emptyBtn}
+                onPress={() => router.push('/new')}
+              >
+                <Text style={styles.emptyBtnText}>+ Yeni Kart Oluştur</Text>
+              </TouchableOpacity>
             </View>
           ) : null
         }
@@ -232,7 +246,7 @@ export default function HomeScreen() {
       {doneCards.length > 0 && (
         <TouchableOpacity style={styles.doneBar}>
           <Text style={styles.doneText}>
-            {doneCards.length} tamamlanan is
+            {doneCards.length} tamamlanan iş
           </Text>
         </TouchableOpacity>
       )}
@@ -275,6 +289,8 @@ const styles = StyleSheet.create({
   emptyIcon: { fontSize: 48, marginBottom: 16 },
   emptyTitle: { fontSize: 20, fontWeight: '700', color: colors.dark, marginBottom: 8 },
   emptyDesc: { fontSize: 14, color: colors.muted, textAlign: 'center', lineHeight: 20 },
+  emptyBtn: { backgroundColor: '#1A1A1A', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 14, marginTop: 16 },
+  emptyBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
   doneBar: {
     paddingVertical: 12, paddingHorizontal: 20,
     borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.card,
@@ -295,4 +311,11 @@ const styles = StyleSheet.create({
     borderRadius: 20, borderWidth: 1, borderColor: colors.border,
   },
   quickChipText: { fontSize: 13, fontWeight: '500', color: colors.dark },
+  errorBanner: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    backgroundColor: '#FFF3CD', paddingHorizontal: 16, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: '#FFE69C',
+  },
+  errorText: { fontSize: 14, color: '#856404', flex: 1 },
+  errorRetry: { fontSize: 14, fontWeight: '600', color: '#856404', marginLeft: 12 },
 });

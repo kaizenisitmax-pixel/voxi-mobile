@@ -11,13 +11,13 @@ function HeaderNav() {
       <View style={styles.header}>
         <Text style={styles.logo}>VOXI</Text>
         <View style={styles.actions}>
-          <TouchableOpacity style={styles.iconBtn} onPress={() => router.push('/(main)/search')}>
+          <TouchableOpacity style={styles.iconBtn} onPress={() => router.push('/(main)/search')} accessibilityLabel="Ara">
             <Text style={styles.iconText}>🔍</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.iconBtn} onPress={() => router.push('/(main)/settings')}>
+          <TouchableOpacity style={styles.iconBtn} onPress={() => router.push('/(main)/settings')} accessibilityLabel="Ayarlar">
             <Text style={styles.iconText}>⚙️</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.addBtn} onPress={() => router.push('/new/')}>
+          <TouchableOpacity style={styles.addBtn} onPress={() => router.push('/new/')} accessibilityLabel="Yeni kart oluştur">
             <Text style={styles.addText}>+</Text>
           </TouchableOpacity>
         </View>

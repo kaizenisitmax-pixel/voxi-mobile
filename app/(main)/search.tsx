@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet,
 } from 'react-native';
@@ -20,46 +20,75 @@ export default function SearchScreen() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleSearch = useCallback(async (text: string) => {
-    setQuery(text);
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
+  const performSearch = useCallback(async (text: string) => {
     if (text.length < 2 || !membership?.workspace_id) {
       setResults([]);
+      setSearching(false);
       return;
     }
 
     setSearching(true);
-    const searchTerm = `%${text}%`;
+    setError(null);
 
-    const [cardsRes, customersRes] = await Promise.all([
-      supabase
-        .from('cards')
-        .select('id, title, description, status')
-        .eq('workspace_id', membership.workspace_id)
-        .ilike('title', searchTerm)
-        .limit(10),
-      supabase
-        .from('customers')
-        .select('id, company_name, contact_name, status')
-        .eq('workspace_id', membership.workspace_id)
-        .ilike('company_name', searchTerm)
-        .limit(10),
-    ]);
+    try {
+      const searchTerm = `%${text}%`;
 
-    const items: SearchResult[] = [
-      ...(cardsRes.data?.map(c => ({
-        id: c.id, type: 'card' as const,
-        title: c.title, subtitle: c.status,
-      })) || []),
-      ...(customersRes.data?.map(c => ({
-        id: c.id, type: 'customer' as const,
-        title: c.company_name, subtitle: c.contact_name || c.status,
-      })) || []),
-    ];
+      const [cardsRes, customersRes] = await Promise.all([
+        supabase
+          .from('cards')
+          .select('id, title, description, status')
+          .eq('workspace_id', membership.workspace_id)
+          .ilike('title', searchTerm)
+          .limit(10),
+        supabase
+          .from('customers')
+          .select('id, company_name, contact_name, status')
+          .eq('workspace_id', membership.workspace_id)
+          .ilike('company_name', searchTerm)
+          .limit(10),
+      ]);
 
-    setResults(items);
-    setSearching(false);
+      if (cardsRes.error) throw cardsRes.error;
+      if (customersRes.error) throw customersRes.error;
+
+      const items: SearchResult[] = [
+        ...(cardsRes.data?.map(c => ({
+          id: c.id, type: 'card' as const,
+          title: c.title, subtitle: c.status,
+        })) || []),
+        ...(customersRes.data?.map(c => ({
+          id: c.id, type: 'customer' as const,
+          title: c.company_name, subtitle: c.contact_name || c.status,
+        })) || []),
+      ];
+
+      setResults(items);
+    } catch (err: any) {
+      console.error('[Search] Error:', err);
+      setError(err.message || 'Arama başarısız');
+    } finally {
+      setSearching(false);
+    }
   }, [membership?.workspace_id]);
+
+  const handleSearch = useCallback((text: string) => {
+    setQuery(text);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (text.length < 2) {
+      setResults([]);
+      return;
+    }
+    debounceRef.current = setTimeout(() => performSearch(text), 300);
+  }, [performSearch]);
 
   const handlePress = (item: SearchResult) => {
     if (item.type === 'card') router.push(`/card/${item.id}`);
@@ -71,7 +100,7 @@ export default function SearchScreen() {
       <View style={styles.searchBar}>
         <TextInput
           style={styles.input}
-          placeholder="Kart, musteri, mesaj ara..."
+          placeholder="Kart, müşteri, mesaj ara..."
           placeholderTextColor={colors.muted}
           value={query}
           onChangeText={handleSearch}
@@ -79,9 +108,15 @@ export default function SearchScreen() {
           autoCorrect={false}
         />
         <TouchableOpacity onPress={() => router.back()}>
-          <Text style={styles.cancel}>Iptal</Text>
+          <Text style={styles.cancel}>İptal</Text>
         </TouchableOpacity>
       </View>
+
+      {error && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText}>⚠️ {error}</Text>
+        </View>
+      )}
 
       <FlatList
         data={results}
@@ -98,14 +133,14 @@ export default function SearchScreen() {
               <Text style={styles.resultSubtitle}>{item.subtitle}</Text>
             </View>
             <Text style={styles.resultType}>
-              {item.type === 'card' ? 'Kart' : item.type === 'customer' ? 'Musteri' : 'Mesaj'}
+              {item.type === 'card' ? 'Kart' : item.type === 'customer' ? 'Müşteri' : 'Mesaj'}
             </Text>
           </TouchableOpacity>
         )}
         ListEmptyComponent={
           query.length >= 2 && !searching ? (
             <View style={styles.empty}>
-              <Text style={styles.emptyText}>Sonuc bulunamadi</Text>
+              <Text style={styles.emptyText}>Sonuç bulunamadı</Text>
             </View>
           ) : null
         }
@@ -139,4 +174,9 @@ const styles = StyleSheet.create({
   resultType: { fontSize: 12, color: colors.muted },
   empty: { padding: 40, alignItems: 'center' },
   emptyText: { fontSize: 16, color: colors.muted },
+  errorBanner: {
+    backgroundColor: '#FFF3CD', paddingHorizontal: 16, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: '#FFE69C',
+  },
+  errorText: { fontSize: 14, color: '#856404' },
 });
