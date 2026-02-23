@@ -2,6 +2,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 
+export type CardMember = {
+  user_id: string;
+  role: string;
+  profiles: { full_name: string | null } | null;
+};
+
 export type Card = {
   id: string;
   workspace_id: string;
@@ -23,10 +29,11 @@ export type Card = {
   created_at: string;
   updated_at: string;
   customers?: { id: string; company_name: string; contact_name: string | null } | null;
+  card_members?: CardMember[];
 };
 
 export function useCards() {
-  const { membership } = useAuth();
+  const { membership, user } = useAuth();
   const [cards, setCards] = useState<Card[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -36,14 +43,49 @@ export function useCards() {
 
     const { data, error } = await supabase
       .from('cards')
-      .select('*, customers(id, company_name, contact_name)')
+      .select(`
+        *,
+        customers(id, company_name, contact_name),
+        card_members(user_id, role)
+      `)
       .eq('workspace_id', membership.workspace_id)
       .neq('status', 'cancelled')
       .order('last_message_at', { ascending: false });
 
-    if (!error && data) {
-      setCards(data as Card[]);
+    if (error) {
+      console.error('[useCards] Fetch error:', error.message);
+      setLoading(false);
+      return;
     }
+
+    if (data && data.length > 0) {
+      const allUserIds = new Set<string>();
+      data.forEach((card: any) => {
+        card.card_members?.forEach((m: any) => allUserIds.add(m.user_id));
+      });
+
+      if (allUserIds.size > 0) {
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('id, full_name')
+          .in('id', Array.from(allUserIds));
+
+        const profileMap = new Map(
+          profiles?.map(p => [p.id, { full_name: p.full_name }]) || []
+        );
+
+        data.forEach((card: any) => {
+          card.card_members?.forEach((m: any) => {
+            m.profiles = profileMap.get(m.user_id) || null;
+          });
+        });
+      }
+
+      setCards(data as Card[]);
+    } else {
+      setCards([]);
+    }
+
     setLoading(false);
   }, [membership?.workspace_id]);
 
@@ -64,9 +106,7 @@ export function useCards() {
           table: 'cards',
           filter: `workspace_id=eq.${membership.workspace_id}`,
         },
-        () => {
-          fetchCards();
-        }
+        () => { fetchCards(); }
       )
       .subscribe();
 
@@ -83,7 +123,7 @@ export function useCards() {
     labels?: string[];
     ai_summary?: string;
   }) => {
-    if (!membership) return null;
+    if (!membership || !user) return null;
 
     const { data: card, error } = await supabase
       .from('cards')
@@ -91,12 +131,19 @@ export function useCards() {
         ...data,
         workspace_id: membership.workspace_id,
         team_id: membership.team_id,
-        created_by_user: (await supabase.auth.getUser()).data.user?.id,
+        created_by_user: user.id,
       })
       .select()
       .single();
 
     if (!error && card) {
+      await supabase.from('card_members').insert({
+        card_id: card.id,
+        user_id: user.id,
+        role: 'owner',
+        added_by: user.id,
+      });
+
       setCards(prev => [card as Card, ...prev]);
     }
 

@@ -19,6 +19,29 @@ export type ChatMessage = {
   profiles?: { full_name: string | null } | null;
 };
 
+async function enrichWithProfiles(messages: any[]): Promise<ChatMessage[]> {
+  if (messages.length === 0) return [];
+
+  const userIds = new Set<string>();
+  messages.forEach(m => { if (m.user_id) userIds.add(m.user_id); });
+
+  if (userIds.size === 0) return messages as ChatMessage[];
+
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('id, full_name')
+    .in('id', Array.from(userIds));
+
+  const profileMap = new Map(
+    profiles?.map(p => [p.id, { full_name: p.full_name }]) || []
+  );
+
+  return messages.map(m => ({
+    ...m,
+    profiles: m.user_id ? profileMap.get(m.user_id) || null : null,
+  })) as ChatMessage[];
+}
+
 export function useChat(cardId: string) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -28,12 +51,19 @@ export function useChat(cardId: string) {
     setLoading(true);
     const { data, error } = await supabase
       .from('card_messages')
-      .select('*, profiles:user_id(full_name)')
+      .select('*')
       .eq('card_id', cardId)
       .order('created_at', { ascending: true });
 
-    if (!error && data) {
-      setMessages(data as ChatMessage[]);
+    if (error) {
+      console.error('[useChat] Fetch error:', error.message);
+      setLoading(false);
+      return;
+    }
+
+    if (data) {
+      const enriched = await enrichWithProfiles(data);
+      setMessages(enriched);
     }
     setLoading(false);
   }, [cardId]);
@@ -51,11 +81,12 @@ export function useChat(cardId: string) {
         async (payload) => {
           const { data } = await supabase
             .from('card_messages')
-            .select('*, profiles:user_id(full_name)')
+            .select('*')
             .eq('id', payload.new.id)
             .single();
           if (data) {
-            setMessages(prev => [...prev, data as ChatMessage]);
+            const [enriched] = await enrichWithProfiles([data]);
+            setMessages(prev => [...prev, enriched]);
           }
         }
       )
@@ -65,14 +96,22 @@ export function useChat(cardId: string) {
   }, [cardId]);
 
   const sendMessage = async (content: string, type: string = 'text', extra: Partial<ChatMessage> = {}) => {
-    const { error } = await supabase.from('card_messages').insert({
-      card_id: cardId,
-      user_id: user?.id,
-      content,
-      message_type: type,
-      ...extra,
-    });
-    return { error };
+    try {
+      const { error } = await supabase.from('card_messages').insert({
+        card_id: cardId,
+        user_id: user?.id,
+        content,
+        message_type: type,
+        ...extra,
+      });
+      if (error) {
+        console.error('[useChat] sendMessage error:', error);
+      }
+      return { error };
+    } catch (err) {
+      console.error('[useChat] sendMessage exception:', err);
+      return { error: err as any };
+    }
   };
 
   return { messages, loading, sendMessage, fetchMessages };

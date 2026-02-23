@@ -1,105 +1,95 @@
 import { supabase } from './supabase';
+import * as FileSystem from 'expo-file-system/legacy';
 
-const WEB_API = 'https://voxi-web-6ids.vercel.app';
+const WEB_API = 'https://voxi-web-production.vercel.app';
 
-type AIProcessResult = {
+export type SmartCreateResult = {
   title: string;
   description: string;
   customerName: string | null;
   labels: string[];
   priority: string;
   isNewBusiness: boolean;
+  voiceResponse: string;
+  transcript?: string;
+  insights?: string[];
+  extractedDetails?: Record<string, string>;
 };
 
-export async function processInput(
-  input: string,
-  type: 'voice' | 'photo' | 'document' | 'text',
+/**
+ * Single API call: audio/photo → transcribe/vision → AI analysis → structured card data.
+ * Sends file as base64 in JSON body (avoids React Native FormData issues).
+ */
+export async function smartCreate(
+  type: 'voice' | 'photo' | 'text' | 'document',
+  payload: { fileUri?: string; text?: string; fileType?: string; fileName?: string },
   workspaceId: string
-): Promise<AIProcessResult> {
-  try {
-    const session = (await supabase.auth.getSession()).data.session;
-    if (!session) throw new Error('No session');
+): Promise<SmartCreateResult> {
+  const session = (await supabase.auth.getSession()).data.session;
+  if (!session) throw new Error('Oturum bulunamadı');
 
-    const response = await fetch(`${WEB_API}/api/ai-process`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({ input, type, workspace_id: workspaceId }),
+  const body: Record<string, string | undefined> = {
+    type,
+    workspace_id: workspaceId,
+  };
+
+  if ((type === 'voice' || type === 'photo' || type === 'document') && payload.fileUri) {
+    console.log('[smartCreate] Reading file as base64...');
+    const base64 = await FileSystem.readAsStringAsync(payload.fileUri, {
+      encoding: 'base64' as FileSystem.EncodingType,
     });
-
-    if (response.ok) {
-      return await response.json();
-    }
-
-    throw new Error('API error');
-  } catch {
-    return {
-      title: input.slice(0, 80),
-      description: input,
-      customerName: null,
-      labels: [],
-      priority: 'normal',
-      isNewBusiness: true,
-    };
+    console.log('[smartCreate] Base64 length:', base64.length);
+    body.fileBase64 = base64;
+    body.fileName = payload.fileName || 'file';
+    body.fileType = payload.fileType || 'application/octet-stream';
   }
-}
 
-export async function transcribeAudio(audioUri: string): Promise<string> {
+  if (payload.text) {
+    body.text = payload.text;
+  }
+
+  console.log('[smartCreate] Calling API...', { type, workspaceId, hasFile: !!body.fileBase64 });
+
+  const fetchPromise = fetch(`${WEB_API}/api/smart-create`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('Zaman aşımı (35s). Lütfen tekrar deneyin.')), 35000)
+  );
+
+  let response: Response;
   try {
-    const session = (await supabase.auth.getSession()).data.session;
-    if (!session) throw new Error('No session');
-
-    const formData = new FormData();
-    formData.append('file', {
-      uri: audioUri,
-      type: 'audio/m4a',
-      name: 'recording.m4a',
-    } as any);
-
-    const response = await fetch(`${WEB_API}/api/transcribe`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${session.access_token}` },
-      body: formData,
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      return data.text || '';
-    }
-
-    return '';
-  } catch {
-    return '';
+    response = await Promise.race([fetchPromise, timeoutPromise]);
+  } catch (err: any) {
+    console.error('[smartCreate] Fetch error:', err.message);
+    throw err;
   }
-}
 
-export async function analyzeImage(imageUri: string): Promise<string> {
-  try {
-    const session = (await supabase.auth.getSession()).data.session;
-    if (!session) throw new Error('No session');
+  console.log('[smartCreate] Response status:', response.status);
 
-    const formData = new FormData();
-    formData.append('file', {
-      uri: imageUri,
-      type: 'image/jpeg',
-      name: 'photo.jpg',
-    } as any);
-
-    const response = await fetch(`${WEB_API}/api/vision`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${session.access_token}` },
-      body: formData,
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      return data.description || '';
+  if (!response.ok) {
+    let errorMsg = `Sunucu hatası (${response.status})`;
+    try {
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const err = await response.json();
+        errorMsg = err.error || errorMsg;
+      } else {
+        const text = await response.text();
+        console.error('[smartCreate] Non-JSON error:', text.slice(0, 300));
+        errorMsg = `Sunucu hatası (${response.status})`;
+      }
+    } catch (parseErr) {
+      console.error('[smartCreate] Error parsing response:', parseErr);
     }
-
-    return '';
-  } catch {
-    return '';
+    throw new Error(errorMsg);
   }
+
+  return await response.json();
 }

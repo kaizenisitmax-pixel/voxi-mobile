@@ -1,10 +1,11 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl } from 'react-native';
-import { useRouter } from 'expo-router';
-import { useCards, Card } from '../../hooks/useCards';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { useCallback } from 'react';
+import { useCards, Card, CardMember } from '../../hooks/useCards';
 import { colors } from '../../lib/colors';
 
-function getInitials(title: string): string {
-  return title
+function getInitials(name: string): string {
+  return name
     .split(/[\s\-]+/)
     .filter(w => w.length > 0)
     .slice(0, 2)
@@ -13,6 +14,7 @@ function getInitials(title: string): string {
 }
 
 function getTimeAgo(date: string): string {
+  if (!date) return '';
   const now = Date.now();
   const diff = now - new Date(date).getTime();
   const mins = Math.floor(diff / 60000);
@@ -32,15 +34,96 @@ function getPriorityDot(priority: string) {
   return null;
 }
 
+function MiniAvatar({ name, size, style }: { name: string; size: number; style?: any }) {
+  return (
+    <View style={[{
+      width: size, height: size, borderRadius: size / 2,
+      backgroundColor: colors.avatar,
+      alignItems: 'center', justifyContent: 'center',
+      borderWidth: 2, borderColor: colors.card,
+    }, style]}>
+      <Text style={{ fontSize: size * 0.35, fontWeight: '700', color: colors.text }}>
+        {getInitials(name)}
+      </Text>
+    </View>
+  );
+}
+
+function AvatarCluster({ members }: { members?: CardMember[] }) {
+  const names = (members || [])
+    .map(m => m.profiles?.full_name || '?')
+    .filter(Boolean);
+
+  const count = names.length;
+
+  if (count === 0) {
+    return (
+      <View style={styles.avatarSingle}>
+        <Text style={styles.avatarSingleText}>?</Text>
+      </View>
+    );
+  }
+
+  if (count === 1) {
+    return (
+      <View style={styles.clusterWrap}>
+        <MiniAvatar name={names[0]} size={52} style={{ borderWidth: 0 }} />
+      </View>
+    );
+  }
+
+  if (count === 2) {
+    return (
+      <View style={styles.clusterWrap}>
+        <MiniAvatar name={names[0]} size={36} style={{ position: 'absolute', top: 0, left: 0, zIndex: 2 }} />
+        <MiniAvatar name={names[1]} size={36} style={{ position: 'absolute', bottom: 0, right: 0, zIndex: 1 }} />
+      </View>
+    );
+  }
+
+  if (count === 3) {
+    return (
+      <View style={styles.clusterWrap}>
+        <MiniAvatar name={names[0]} size={30} style={{ position: 'absolute', top: 0, left: 11, zIndex: 3 }} />
+        <MiniAvatar name={names[1]} size={30} style={{ position: 'absolute', bottom: 0, left: 0, zIndex: 2 }} />
+        <MiniAvatar name={names[2]} size={30} style={{ position: 'absolute', bottom: 0, right: 0, zIndex: 1 }} />
+      </View>
+    );
+  }
+
+  // 4+ members
+  const extra = count - 3;
+  return (
+    <View style={styles.clusterWrap}>
+      <MiniAvatar name={names[0]} size={28} style={{ position: 'absolute', top: 0, left: 0, zIndex: 4 }} />
+      <MiniAvatar name={names[1]} size={28} style={{ position: 'absolute', top: 0, right: 0, zIndex: 3 }} />
+      <MiniAvatar name={names[2]} size={28} style={{ position: 'absolute', bottom: 0, left: 0, zIndex: 2 }} />
+      <View style={[{
+        position: 'absolute', bottom: 0, right: 0, zIndex: 1,
+        width: 28, height: 28, borderRadius: 14,
+        backgroundColor: colors.dark,
+        alignItems: 'center', justifyContent: 'center',
+        borderWidth: 2, borderColor: colors.card,
+      }]}>
+        <Text style={{ fontSize: 10, fontWeight: '700', color: '#FFFFFF' }}>+{extra}</Text>
+      </View>
+    </View>
+  );
+}
+
 function CardItem({ card, onPress }: { card: Card; onPress: () => void }) {
   const dotColor = getPriorityDot(card.priority);
   const customerName = card.customers?.company_name;
+  const memberCount = card.card_members?.length || 0;
+  const memberNames = (card.card_members || [])
+    .slice(0, 3)
+    .map(m => m.profiles?.full_name?.split(' ')[0])
+    .filter(Boolean)
+    .join(', ');
 
   return (
     <TouchableOpacity style={styles.cardItem} onPress={onPress} activeOpacity={0.7}>
-      <View style={styles.avatar}>
-        <Text style={styles.avatarText}>{getInitials(card.title)}</Text>
-      </View>
+      <AvatarCluster members={card.card_members} />
 
       <View style={styles.cardContent}>
         <View style={styles.cardTop}>
@@ -62,8 +145,12 @@ function CardItem({ card, onPress }: { card: Card; onPress: () => void }) {
           )}
         </View>
 
-        {customerName && (
-          <Text style={styles.customerTag} numberOfLines={1}>{customerName}</Text>
+        {(customerName || memberNames) && (
+          <Text style={styles.metaTag} numberOfLines={1}>
+            {customerName ? customerName : ''}
+            {customerName && memberNames ? ' · ' : ''}
+            {memberNames}{memberCount > 3 ? ` +${memberCount - 3}` : ''}
+          </Text>
         )}
       </View>
     </TouchableOpacity>
@@ -73,6 +160,12 @@ function CardItem({ card, onPress }: { card: Card; onPress: () => void }) {
 export default function HomeScreen() {
   const router = useRouter();
   const { cards, loading, fetchCards } = useCards();
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchCards();
+    }, [fetchCards])
+  );
 
   const openCards = cards.filter(c => c.status !== 'done');
   const doneCards = cards.filter(c => c.status === 'done');
@@ -123,11 +216,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row', paddingHorizontal: 20, paddingVertical: 14,
     backgroundColor: colors.card, gap: 14, alignItems: 'center',
   },
-  avatar: {
+  clusterWrap: {
+    width: 52, height: 52, position: 'relative',
+  },
+  avatarSingle: {
     width: 52, height: 52, borderRadius: 26, backgroundColor: colors.avatar,
     alignItems: 'center', justifyContent: 'center',
   },
-  avatarText: { fontSize: 16, fontWeight: '700', color: colors.text },
+  avatarSingleText: { fontSize: 16, fontWeight: '700', color: colors.text },
   cardContent: { flex: 1 },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   cardTitle: { fontSize: 16, fontWeight: '600', color: colors.dark, flex: 1, marginRight: 8 },
@@ -142,7 +238,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   badgeText: { fontSize: 11, fontWeight: '700', color: '#FFFFFF' },
-  customerTag: { fontSize: 12, color: colors.muted, marginTop: 4 },
+  metaTag: { fontSize: 12, color: colors.muted, marginTop: 4 },
   separator: { height: 1, backgroundColor: colors.border, marginLeft: 86 },
   empty: { alignItems: 'center', paddingTop: 80 },
   emptyContainer: { flex: 1 },

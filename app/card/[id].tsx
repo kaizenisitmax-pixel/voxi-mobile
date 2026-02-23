@@ -4,35 +4,71 @@ import {
   KeyboardAvoidingView, Platform, ScrollView, Linking, Alert, ActivityIndicator,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useChat, ChatMessage } from '../../hooks/useChat';
 import { useDepot } from '../../hooks/useDepot';
 import { colors } from '../../lib/colors';
-import type { Card } from '../../hooks/useCards';
+import AddMemberModal from '../../components/AddMemberModal';
+import type { Card, CardMember } from '../../hooks/useCards';
 
 type Tab = 'chat' | 'depot';
+
+function getInitials(name: string): string {
+  return name.split(/[\s\-]+/).filter(w => w.length > 0).slice(0, 2).map(w => w[0].toUpperCase()).join('');
+}
 
 export default function CardDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, membership } = useAuth();
   const [tab, setTab] = useState<Tab>('chat');
   const [card, setCard] = useState<Card | null>(null);
   const [cardLoading, setCardLoading] = useState(true);
+  const [members, setMembers] = useState<CardMember[]>([]);
+  const [showAddMember, setShowAddMember] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase
-        .from('cards')
-        .select('*, customers(id, company_name, contact_name)')
-        .eq('id', id)
-        .single();
+  const fetchCard = async () => {
+    const { data } = await supabase
+      .from('cards')
+      .select(`
+        *,
+        customers(id, company_name, contact_name),
+        card_members(user_id, role)
+      `)
+      .eq('id', id)
+      .single();
+
+    if (data) {
+      const rawMembers: CardMember[] = (data as any).card_members || [];
+
+      const userIds = rawMembers.map(m => m.user_id);
+      if (userIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('id, full_name')
+          .in('id', userIds);
+
+        const profileMap = new Map(
+          profiles?.map(p => [p.id, { full_name: p.full_name }]) || []
+        );
+        rawMembers.forEach(m => {
+          m.profiles = profileMap.get(m.user_id) || null;
+        });
+      }
+
       setCard(data as Card);
-      setCardLoading(false);
-    })();
-  }, [id]);
+      setMembers(rawMembers);
+    }
+    setCardLoading(false);
+  };
+
+  useEffect(() => { fetchCard(); }, [id]);
+
+  const handleMembersChanged = () => {
+    fetchCard();
+  };
 
   if (cardLoading || !card) {
     return (
@@ -51,10 +87,30 @@ export default function CardDetailScreen() {
         </TouchableOpacity>
         <View style={styles.headerContent}>
           <Text style={styles.headerTitle} numberOfLines={1}>{card.title}</Text>
-          <Text style={styles.headerSub} numberOfLines={1}>
-            {card.customers?.company_name || card.status}
-            {card.priority === 'urgent' ? ' · Acil' : ''}
-          </Text>
+          <View style={styles.headerMeta}>
+            <Text style={styles.headerSub} numberOfLines={1}>
+              {card.customers?.company_name || card.status}
+              {card.priority === 'urgent' ? ' · Acil' : ''}
+            </Text>
+          </View>
+          {/* Member avatars row */}
+          <View style={styles.memberRow}>
+            {members.slice(0, 5).map((m, i) => (
+              <View key={m.user_id} style={[styles.miniAvatar, i > 0 && { marginLeft: -6 }]}>
+                <Text style={styles.miniAvatarText}>
+                  {getInitials(m.profiles?.full_name || '?')}
+                </Text>
+              </View>
+            ))}
+            {members.length > 5 && (
+              <View style={[styles.miniAvatar, { marginLeft: -6, backgroundColor: colors.dark }]}>
+                <Text style={[styles.miniAvatarText, { color: '#FFF' }]}>+{members.length - 5}</Text>
+              </View>
+            )}
+            <TouchableOpacity style={styles.addMemberBtn} onPress={() => setShowAddMember(true)}>
+              <Text style={styles.addMemberText}>+</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -76,16 +132,27 @@ export default function CardDetailScreen() {
 
       {/* Content */}
       {tab === 'chat' ? (
-        <ChatTab cardId={id!} userId={user?.id} />
+        <ChatTab cardId={id!} userId={user?.id} members={members} />
       ) : (
         <DepotTab cardId={id!} card={card} />
       )}
+
+      {/* Add Member Modal */}
+      <AddMemberModal
+        visible={showAddMember}
+        onClose={() => setShowAddMember(false)}
+        cardId={id!}
+        currentMembers={members}
+        workspaceId={membership?.workspace_id}
+        teamId={membership?.team_id}
+        onMembersChanged={handleMembersChanged}
+      />
     </SafeAreaView>
   );
 }
 
 // ─────── CHAT TAB ───────
-function ChatTab({ cardId, userId }: { cardId: string; userId?: string }) {
+function ChatTab({ cardId, userId, members }: { cardId: string; userId?: string; members: CardMember[] }) {
   const { messages, loading, sendMessage } = useChat(cardId);
   const [text, setText] = useState('');
   const listRef = useRef<FlatList>(null);
@@ -100,7 +167,10 @@ function ChatTab({ cardId, userId }: { cardId: string; userId?: string }) {
     if (!text.trim()) return;
     const msg = text.trim();
     setText('');
-    await sendMessage(msg);
+    const result = await sendMessage(msg);
+    if (result?.error) {
+      Alert.alert('Hata', 'Mesaj gonderilemedi. Tekrar deneyin.');
+    }
   };
 
   return (
@@ -181,7 +251,16 @@ function MessageBubble({ message, isMe }: { message: ChatMessage; isMe: boolean 
 
   return (
     <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleOther]}>
-      {!isMe && <Text style={styles.senderName}>{senderName}</Text>}
+      {!isMe && (
+        <View style={styles.senderRow}>
+          <View style={styles.senderAvatar}>
+            <Text style={styles.senderAvatarText}>
+              {senderName.split(/[\s\-]+/).filter(w => w.length > 0).slice(0, 2).map(w => w[0].toUpperCase()).join('')}
+            </Text>
+          </View>
+          <Text style={styles.senderName}>{senderName}</Text>
+        </View>
+      )}
       <Text style={styles.bubbleText}>{message.content}</Text>
       <Text style={[styles.msgTime, isMe && styles.msgTimeMe]}>{time}</Text>
     </View>
@@ -310,15 +389,29 @@ function ActionButton({ icon, label, onPress }: { icon: string; label: string; o
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 12,
     paddingHorizontal: 16, paddingVertical: 12,
     backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border,
   },
-  backBtn: { padding: 4 },
+  backBtn: { padding: 4, marginTop: 2 },
   backText: { fontSize: 22, color: colors.dark, fontWeight: '500' },
   headerContent: { flex: 1 },
   headerTitle: { fontSize: 17, fontWeight: '700', color: colors.dark },
-  headerSub: { fontSize: 13, color: colors.muted, marginTop: 2 },
+  headerMeta: { marginTop: 2 },
+  headerSub: { fontSize: 13, color: colors.muted },
+  memberRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
+  miniAvatar: {
+    width: 24, height: 24, borderRadius: 12, backgroundColor: colors.avatar,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: colors.card,
+  },
+  miniAvatarText: { fontSize: 8, fontWeight: '700', color: colors.text },
+  addMemberBtn: {
+    width: 24, height: 24, borderRadius: 12,
+    borderWidth: 1.5, borderColor: colors.borderLight, borderStyle: 'dashed',
+    alignItems: 'center', justifyContent: 'center', marginLeft: 4,
+  },
+  addMemberText: { fontSize: 14, fontWeight: '600', color: colors.muted },
   tabBar: {
     flexDirection: 'row', backgroundColor: colors.card,
     borderBottomWidth: 1, borderBottomColor: colors.border,
@@ -335,7 +428,13 @@ const styles = StyleSheet.create({
   bubble: { maxWidth: '80%', padding: 12, borderRadius: 16, marginBottom: 4 },
   bubbleMe: { backgroundColor: colors.bubble, alignSelf: 'flex-end', borderBottomRightRadius: 4 },
   bubbleOther: { backgroundColor: colors.card, alignSelf: 'flex-start', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: colors.border },
-  senderName: { fontSize: 12, fontWeight: '600', color: colors.dark, marginBottom: 4 },
+  senderRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  senderAvatar: {
+    width: 18, height: 18, borderRadius: 9, backgroundColor: colors.avatar,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  senderAvatarText: { fontSize: 7, fontWeight: '700', color: colors.text },
+  senderName: { fontSize: 12, fontWeight: '600', color: colors.dark },
   bubbleText: { fontSize: 15, color: colors.dark, lineHeight: 21 },
   voiceLabel: { fontSize: 14, color: colors.muted, marginBottom: 4 },
   msgTime: { fontSize: 11, color: colors.muted, marginTop: 4 },
