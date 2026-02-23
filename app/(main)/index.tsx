@@ -1,8 +1,10 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, ScrollView } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useCards, Card, CardMember } from '../../hooks/useCards';
 import { colors } from '../../lib/colors';
+import { getSelectedIndustry } from '../../lib/industryStore';
+import type { Industry } from '../../lib/industries';
 
 function getInitials(name: string): string {
   return name
@@ -157,13 +159,40 @@ function CardItem({ card, onPress }: { card: Card; onPress: () => void }) {
   );
 }
 
+function QuickActions({ industry }: { industry: Industry | null }) {
+  const router = useRouter();
+  if (!industry || industry.quickActions.length === 0) return null;
+
+  return (
+    <View style={styles.quickActionsWrap}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickActionsScroll}>
+        <View style={styles.quickBadge}>
+          <Text style={styles.quickBadgeText}>⚡ {industry.name}</Text>
+        </View>
+        {industry.quickActions.map((action, i) => (
+          <TouchableOpacity
+            key={i}
+            style={styles.quickChip}
+            onPress={() => router.push('/new')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.quickChipText}>{action}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
 export default function HomeScreen() {
   const router = useRouter();
   const { cards, loading, fetchCards } = useCards();
+  const [industry, setIndustry] = useState<Industry | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       fetchCards();
+      getSelectedIndustry().then(setIndustry);
     }, [fetchCards])
   );
 
@@ -184,13 +213,14 @@ export default function HomeScreen() {
         refreshControl={
           <RefreshControl refreshing={loading} onRefresh={fetchCards} tintColor={colors.dark} />
         }
+        ListHeaderComponent={<QuickActions industry={industry} />}
         ListEmptyComponent={
           !loading ? (
             <View style={styles.empty}>
               <Text style={styles.emptyIcon}>💬</Text>
-              <Text style={styles.emptyTitle}>Henuz kart yok</Text>
+              <Text style={styles.emptyTitle}>Henüz kart yok</Text>
               <Text style={styles.emptyDesc}>
-                Sag ustteki + butonuna tiklayarak{'\n'}ses kaydi, foto veya metin ile baslaylin.
+                Sağ üstteki + butonuna tıklayarak{'\n'}ses kaydı, foto veya metin ile başlayın.
               </Text>
             </View>
           ) : null
@@ -250,4 +280,19 @@ const styles = StyleSheet.create({
     borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.card,
   },
   doneText: { fontSize: 14, color: colors.muted, textAlign: 'center' },
+  quickActionsWrap: {
+    paddingVertical: 12, backgroundColor: colors.card,
+    borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  quickActionsScroll: { paddingHorizontal: 16, gap: 8 },
+  quickBadge: {
+    backgroundColor: colors.dark, paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: 20,
+  },
+  quickBadgeText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  quickChip: {
+    backgroundColor: colors.bg, paddingHorizontal: 14, paddingVertical: 8,
+    borderRadius: 20, borderWidth: 1, borderColor: colors.border,
+  },
+  quickChipText: { fontSize: 13, fontWeight: '500', color: colors.dark },
 });

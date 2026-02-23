@@ -23,14 +23,16 @@ export type SmartCreateResult = {
 export async function smartCreate(
   type: 'voice' | 'photo' | 'text' | 'document',
   payload: { fileUri?: string; text?: string; fileType?: string; fileName?: string },
-  workspaceId: string
+  workspaceId: string,
+  industryId?: number | null
 ): Promise<SmartCreateResult> {
   const session = (await supabase.auth.getSession()).data.session;
   if (!session) throw new Error('Oturum bulunamadı');
 
-  const body: Record<string, string | undefined> = {
+  const body: Record<string, string | number | undefined> = {
     type,
     workspace_id: workspaceId,
+    industryId: industryId || undefined,
   };
 
   if ((type === 'voice' || type === 'photo' || type === 'document') && payload.fileUri) {

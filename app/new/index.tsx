@@ -15,6 +15,9 @@ import { useCards } from '../../hooks/useCards';
 import { supabase } from '../../lib/supabase';
 import { smartCreate, SmartCreateResult } from '../../lib/ai';
 import { colors } from '../../lib/colors';
+import { getSelectedIndustryId } from '../../lib/industryStore';
+import TemplateSheet from '../../components/TemplateSheet';
+import type { Industry } from '../../lib/industries';
 
 type Mode = 'choose' | 'recording' | 'processing' | 'confirm' | 'creating' | 'done' | 'error' | 'text';
 type ProcessStep = 'transcribe' | 'analyze' | 'done';
@@ -72,12 +75,15 @@ export default function NewEntryScreen() {
   const [text, setText] = useState('');
   const [creating, setCreating] = useState(false);
   const [createdCardTitle, setCreatedCardTitle] = useState('');
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [industryId, setIndustryId] = useState<number | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
+    getSelectedIndustryId().then(setIndustryId);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
       Speech.stop();
@@ -232,7 +238,7 @@ export default function NewEntryScreen() {
     setTranscript('');
 
     try {
-      const result = await smartCreate(type, payload, membership!.workspace_id);
+      const result = await smartCreate(type, payload, membership!.workspace_id, industryId);
       console.log('[processInput] AI result:', JSON.stringify(result).slice(0, 400));
 
       setAiResult(result);
@@ -729,6 +735,26 @@ export default function NewEntryScreen() {
           <Text style={styles.secondaryLabel}>Yaz</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Template button */}
+      <TouchableOpacity
+        style={styles.templateBar}
+        onPress={() => setShowTemplates(true)}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.templateBarIcon}>📋</Text>
+        <Text style={styles.templateBarText}>Hazır Şablonlar</Text>
+        <Text style={styles.templateBarArrow}>→</Text>
+      </TouchableOpacity>
+
+      <TemplateSheet
+        visible={showTemplates}
+        onClose={() => setShowTemplates(false)}
+        onSelect={(template) => {
+          setText(template.content);
+          setMode('text');
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -758,6 +784,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.border, overflow: 'hidden',
   },
   secondaryLabel: { fontSize: 12, fontWeight: '600', color: colors.text },
+  templateBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    marginHorizontal: 24, marginBottom: 20, paddingVertical: 14, paddingHorizontal: 18,
+    backgroundColor: colors.card, borderRadius: 14, borderWidth: 1, borderColor: colors.border,
+  },
+  templateBarIcon: { fontSize: 20 },
+  templateBarText: { flex: 1, fontSize: 15, fontWeight: '600', color: colors.dark },
+  templateBarArrow: { fontSize: 16, color: colors.muted },
 
   // ─── Recording ───
   recordingContainer: { flex: 1, padding: 24 },

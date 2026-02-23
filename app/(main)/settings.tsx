@@ -1,12 +1,21 @@
+import { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../../contexts/AuthContext';
 import { colors } from '../../lib/colors';
+import { getSelectedIndustry } from '../../lib/industryStore';
+import { Industry } from '../../lib/industries';
+import IndustryPicker from '../../components/IndustryPicker';
 
 export default function SettingsScreen() {
   const router = useRouter();
   const { user, profile, membership, signOut } = useAuth();
+  const [showIndustryPicker, setShowIndustryPicker] = useState(false);
+  const [selectedIndustry, setSelectedIndustry] = useState<Industry | null>(null);
+
+  useEffect(() => {
+    getSelectedIndustry().then(setSelectedIndustry);
+  }, []);
 
   const initials = profile?.full_name
     ?.split(' ')
@@ -16,9 +25,9 @@ export default function SettingsScreen() {
     .toUpperCase() || '?';
 
   const handleSignOut = () => {
-    Alert.alert('Cikis Yap', 'Cikmak istediginizden emin misiniz?', [
-      { text: 'Iptal', style: 'cancel' },
-      { text: 'Cikis Yap', style: 'destructive', onPress: signOut },
+    Alert.alert('Çıkış Yap', 'Çıkmak istediğinizden emin misiniz?', [
+      { text: 'İptal', style: 'cancel' },
+      { text: 'Çıkış Yap', style: 'destructive', onPress: signOut },
     ]);
   };
 
@@ -37,30 +46,69 @@ export default function SettingsScreen() {
           <View style={styles.profileAvatar}>
             <Text style={styles.profileInitials}>{initials}</Text>
           </View>
-          <Text style={styles.profileName}>{profile?.full_name || 'Kullanici'}</Text>
+          <Text style={styles.profileName}>{profile?.full_name || 'Kullanıcı'}</Text>
           <Text style={styles.profileEmail}>{user?.email}</Text>
           {membership?.workspaces && (
             <Text style={styles.profileWorkspace}>{(membership.workspaces as any).name}</Text>
           )}
         </View>
 
+        {/* Industry Selection - Prominent */}
+        <TouchableOpacity
+          style={styles.industryCard}
+          onPress={() => setShowIndustryPicker(true)}
+          activeOpacity={0.7}
+        >
+          <View style={styles.industryLeft}>
+            <Text style={styles.industryIcon}>🏢</Text>
+            <View>
+              <Text style={styles.industryLabel}>Sektör</Text>
+              <Text style={styles.industryValue}>
+                {selectedIndustry ? selectedIndustry.name : 'Seçilmedi — dokunun'}
+              </Text>
+              {selectedIndustry && (
+                <Text style={styles.industryCategory}>{selectedIndustry.category}</Text>
+              )}
+            </View>
+          </View>
+          <Text style={styles.industryArrow}>→</Text>
+        </TouchableOpacity>
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Hesap</Text>
-          <SettingItem label="Profil Duzenle" />
+          <SettingItem label="Profil Düzenle" />
           <SettingItem label="Bildirim Tercihleri" />
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Yardim</Text>
-          <SettingItem label="Gizlilik Politikasi" />
-          <SettingItem label="Kullanim Kosullari" />
+          <Text style={styles.sectionTitle}>VOXI AI</Text>
+          <SettingItem
+            label="Sektör Şablonları"
+            value={selectedIndustry ? `${selectedIndustry.templates.length} şablon` : 'Sektör seçin'}
+          />
+          <SettingItem
+            label="Hızlı Aksiyonlar"
+            value={selectedIndustry ? `${selectedIndustry.quickActions.length} aksiyon` : 'Sektör seçin'}
+          />
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Yardım</Text>
+          <SettingItem label="Gizlilik Politikası" />
+          <SettingItem label="Kullanım Koşulları" />
           <SettingItem label="Versiyon" value="1.0.0" />
         </View>
 
         <TouchableOpacity style={styles.signOutBtn} onPress={handleSignOut}>
-          <Text style={styles.signOutText}>Cikis Yap</Text>
+          <Text style={styles.signOutText}>Çıkış Yap</Text>
         </TouchableOpacity>
       </ScrollView>
+
+      <IndustryPicker
+        visible={showIndustryPicker}
+        onClose={() => setShowIndustryPicker(false)}
+        onSelect={(industry) => setSelectedIndustry(industry)}
+      />
     </View>
   );
 }
@@ -96,6 +144,17 @@ const styles = StyleSheet.create({
   profileName: { fontSize: 20, fontWeight: '700', color: colors.dark },
   profileEmail: { fontSize: 14, color: colors.muted, marginTop: 4 },
   profileWorkspace: { fontSize: 14, color: colors.text, marginTop: 8, fontWeight: '500' },
+  industryCard: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: colors.card, borderRadius: 16, padding: 18,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  industryLeft: { flexDirection: 'row', alignItems: 'center', gap: 14, flex: 1 },
+  industryIcon: { fontSize: 32 },
+  industryLabel: { fontSize: 12, fontWeight: '700', color: colors.muted, letterSpacing: 0.5, textTransform: 'uppercase' },
+  industryValue: { fontSize: 16, fontWeight: '600', color: colors.dark, marginTop: 2 },
+  industryCategory: { fontSize: 12, color: colors.muted, marginTop: 2 },
+  industryArrow: { fontSize: 18, color: colors.muted },
   section: { gap: 2 },
   sectionTitle: { fontSize: 13, fontWeight: '600', color: colors.muted, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
   settingItem: {
