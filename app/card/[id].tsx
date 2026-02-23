@@ -4,7 +4,7 @@ import {
   KeyboardAvoidingView, Platform, ScrollView, Linking, Alert, ActivityIndicator,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useChat, ChatMessage } from '../../hooks/useChat';
@@ -106,8 +106,8 @@ function ChatTab({ cardId, userId }: { cardId: string; userId?: string }) {
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={100}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
     >
       <FlatList
         ref={listRef}
@@ -115,6 +115,9 @@ function ChatTab({ cardId, userId }: { cardId: string; userId?: string }) {
         keyExtractor={m => m.id}
         renderItem={({ item }) => <MessageBubble message={item} isMe={item.user_id === userId} />}
         contentContainerStyle={styles.chatList}
+        keyboardDismissMode="interactive"
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
         ListEmptyComponent={
           !loading ? (
             <View style={styles.chatEmpty}>
@@ -122,26 +125,30 @@ function ChatTab({ cardId, userId }: { cardId: string; userId?: string }) {
             </View>
           ) : null
         }
+        onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+        onLayout={() => listRef.current?.scrollToEnd({ animated: false })}
       />
 
-      <View style={styles.inputBar}>
-        <TextInput
-          style={styles.chatInput}
-          placeholder="Mesaj yaz..."
-          placeholderTextColor={colors.muted}
-          value={text}
-          onChangeText={setText}
-          multiline
-          maxLength={2000}
-        />
-        <TouchableOpacity
-          style={[styles.sendBtn, !text.trim() && styles.sendBtnDisabled]}
-          onPress={handleSend}
-          disabled={!text.trim()}
-        >
-          <Text style={styles.sendText}>→</Text>
-        </TouchableOpacity>
-      </View>
+      <SafeAreaView edges={['bottom']} style={{ backgroundColor: colors.card }}>
+        <View style={styles.inputBar}>
+          <TextInput
+            style={styles.chatInput}
+            placeholder="Mesaj yaz..."
+            placeholderTextColor={colors.muted}
+            value={text}
+            onChangeText={setText}
+            multiline
+            maxLength={2000}
+          />
+          <TouchableOpacity
+            style={[styles.sendBtn, !text.trim() && styles.sendBtnDisabled]}
+            onPress={handleSend}
+            disabled={!text.trim()}
+          >
+            <Text style={styles.sendText}>→</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
     </KeyboardAvoidingView>
   );
 }

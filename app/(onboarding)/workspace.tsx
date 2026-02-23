@@ -19,31 +19,16 @@ export default function WorkspaceSetup() {
     if (!companyName.trim()) return;
     setLoading(true);
 
-    const { data: ws, error: wsErr } = await supabase
-      .from('workspaces')
-      .insert({ name: companyName.trim() })
-      .select()
-      .single();
+    const { data, error } = await supabase.rpc('create_workspace_with_team', {
+      p_workspace_name: companyName.trim(),
+      p_team_name: teamName.trim() || 'Genel',
+    });
 
-    if (wsErr || !ws) {
-      Alert.alert('Hata', wsErr?.message || 'Workspace olusturulamadi');
+    if (error) {
+      Alert.alert('Hata', error.message);
       setLoading(false);
       return;
     }
-
-    const { data: team } = await supabase
-      .from('teams')
-      .insert({ workspace_id: ws.id, name: teamName.trim() || 'Genel' })
-      .select()
-      .single();
-
-    await supabase.from('workspace_members').insert({
-      workspace_id: ws.id,
-      team_id: team?.id,
-      user_id: user!.id,
-      role: 'owner',
-      is_active: true,
-    });
 
     await refreshProfile();
     setLoading(false);
@@ -53,32 +38,17 @@ export default function WorkspaceSetup() {
     if (!inviteCode.trim()) return;
     setLoading(true);
 
-    const { data: invite, error } = await supabase
-      .from('invitations')
-      .select('*')
-      .eq('invite_code', inviteCode.trim().toUpperCase())
-      .is('used_at', null)
-      .gt('expires_at', new Date().toISOString())
-      .maybeSingle();
+    const { data, error } = await supabase.rpc('join_workspace_with_code', {
+      p_invite_code: inviteCode.trim(),
+    });
 
-    if (error || !invite) {
-      Alert.alert('Hata', 'Gecersiz veya suresi dolmus davet kodu.');
+    if (error) {
+      Alert.alert('Hata', error.message === 'Invalid or expired invite code'
+        ? 'Gecersiz veya suresi dolmus davet kodu.'
+        : error.message);
       setLoading(false);
       return;
     }
-
-    await supabase.from('workspace_members').insert({
-      workspace_id: invite.workspace_id,
-      team_id: invite.team_id,
-      user_id: user!.id,
-      role: invite.role || 'member',
-      is_active: true,
-    });
-
-    await supabase.from('invitations').update({
-      used_at: new Date().toISOString(),
-      used_by: user!.id,
-    }).eq('id', invite.id);
 
     await refreshProfile();
     setLoading(false);

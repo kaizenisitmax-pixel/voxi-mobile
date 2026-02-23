@@ -18,8 +18,10 @@ export default function ProfileSetup() {
     setLoading(true);
 
     const { error } = await supabase
-      .from('profiles')
-      .upsert({ id: user!.id, full_name: fullName.trim(), phone: phone.trim() || null });
+      .rpc('upsert_profile', {
+        p_full_name: fullName.trim(),
+        p_phone: phone.trim() || null,
+      });
 
     setLoading(false);
 

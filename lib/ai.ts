@@ -1,7 +1,6 @@
 import { supabase } from './supabase';
 
-const API_BASE = 'https://blckiefpjkuytdraokwn.supabase.co/functions/v1';
-const WEB_API = process.env.EXPO_PUBLIC_WEB_URL || 'https://voxi-web-6ids.vercel.app';
+const WEB_API = 'https://voxi-web-6ids.vercel.app';
 
 type AIProcessResult = {
   title: string;
