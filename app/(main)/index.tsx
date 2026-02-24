@@ -1,7 +1,7 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, ScrollView, Modal } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useState, useCallback, memo, useEffect, useMemo } from 'react';
-import { useCards, Card, CardMember } from '../../hooks/useCards';
+import { useCards, useArchivedCards, Card, CardMember } from '../../hooks/useCards';
 import { colors } from '../../lib/colors';
 import { getSelectedIndustry } from '../../lib/industryStore';
 import type { Industry } from '../../lib/industries';
@@ -12,15 +12,16 @@ import { useAuth } from '../../contexts/AuthContext';
 import { ONCELIK_RENK, siralaKartlar, type Oncelik } from '../../lib/constants';
 
 // ─── Filtre tanımları ─────────────────────────────────────────────
-type FilterKey = 'all' | 'urgent' | 'active' | 'open' | 'done' | 'mine';
+type FilterKey = 'all' | 'urgent' | 'active' | 'open' | 'done' | 'mine' | 'archive';
 
 const FILTERS: { key: FilterKey; label: string; emoji: string }[] = [
-  { key: 'all',    label: 'Tümü',     emoji: '🏠' },
-  { key: 'urgent', label: 'Acil',     emoji: '⚡' },
-  { key: 'active', label: 'En Son',   emoji: '🕐' },
-  { key: 'open',   label: 'Bekleyen', emoji: '⏳' },
-  { key: 'done',   label: 'Biten',    emoji: '✅' },
-  { key: 'mine',   label: 'Kişisel',  emoji: '👤' },
+  { key: 'all',     label: 'Tümü',     emoji: '🏠' },
+  { key: 'urgent',  label: 'Acil',     emoji: '⚡' },
+  { key: 'active',  label: 'En Son',   emoji: '🕐' },
+  { key: 'open',    label: 'Bekleyen', emoji: '⏳' },
+  { key: 'done',    label: 'Biten',    emoji: '✅' },
+  { key: 'mine',    label: 'Kişisel',  emoji: '👤' },
+  { key: 'archive', label: 'Arşiv',    emoji: '📦' },
 ];
 
 // ─── Filtre Chip'leri ─────────────────────────────────────────────
@@ -35,12 +36,13 @@ const FilterChips = memo(function FilterChips({
   onTemplatePress: () => void;
 }) {
   const counts: Record<FilterKey, number> = {
-    all:    cards.filter(c => c.status !== 'done' && c.status !== 'cancelled').length,
-    urgent: cards.filter(c => c.priority === 'urgent' && c.status !== 'done').length,
-    active: Math.min(cards.length, 10),
-    open:   cards.filter(c => c.status === 'open' || c.status === 'waiting').length,
-    done:   cards.filter(c => c.status === 'done').length,
-    mine:   cards.filter(c => currentUserId && c.card_members?.some((m: any) => m.user_id === currentUserId)).length,
+    all:     cards.filter(c => c.status !== 'done' && c.status !== 'cancelled').length,
+    urgent:  cards.filter(c => c.priority === 'urgent' && c.status !== 'done').length,
+    active:  Math.min(cards.length, 10),
+    open:    cards.filter(c => c.status === 'open' || c.status === 'waiting').length,
+    done:    cards.filter(c => c.status === 'done').length,
+    mine:    cards.filter(c => currentUserId && c.card_members?.some((m: any) => m.user_id === currentUserId)).length,
+    archive: 0, // archive hook'undan geliyor, burada 0
   };
 
   return (
@@ -290,7 +292,7 @@ type Celebration = { type: 'work_anniversary' | 'milestone' | 'birthday'; name: 
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { cards, loading, error, fetchCards } = useCards();
+  const { cards, loading, error, hasMore, fetchCards, fetchNextPage } = useCards();
   const { membership, user } = useAuth();
   const [industry, setIndustry] = useState<Industry | null>(null);
   const [showMood, setShowMood] = useState(false);
@@ -298,6 +300,10 @@ export default function HomeScreen() {
   const [showCelebrations, setShowCelebrations] = useState(false);
   const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
   const [showTemplates, setShowTemplates] = useState(false);
+
+  const isArchiveMode = activeFilter === 'archive';
+  const { cards: archivedCards, loading: archiveLoading, hasMore: archiveHasMore,
+          fetchNextPage: archiveNextPage, refresh: refreshArchive } = useArchivedCards();
 
   // Check if mood check-in was done today
   useEffect(() => {
@@ -323,6 +329,7 @@ export default function HomeScreen() {
 
   // Filtre uygula
   const filteredOpen = useMemo(() => {
+    if (isArchiveMode) return archivedCards;
     const currentUserId = user?.id;
     switch (activeFilter) {
       case 'urgent': return acikKartlar.filter(c => c.priority === 'urgent');
@@ -334,10 +341,14 @@ export default function HomeScreen() {
       );
       default:       return acikKartlar;
     }
-  }, [acikKartlar, tamamlananKartlar, activeFilter, user?.id]);
+  }, [acikKartlar, tamamlananKartlar, activeFilter, user?.id, isArchiveMode, archivedCards]);
 
   const openCards = filteredOpen;
-  const doneCards = activeFilter === 'done' ? [] : tamamlananKartlar;
+  const doneCards = (activeFilter === 'done' || isArchiveMode) ? [] : tamamlananKartlar;
+  const currentLoading = isArchiveMode ? archiveLoading : loading;
+  const currentHasMore = isArchiveMode ? archiveHasMore : hasMore;
+  const loadNextPage = isArchiveMode ? archiveNextPage : fetchNextPage;
+  const currentRefresh = isArchiveMode ? refreshArchive : () => fetchCards(true);
 
   const handleMoodClose = async () => {
     const today = new Date().toISOString().split('T')[0];
@@ -390,10 +401,12 @@ export default function HomeScreen() {
           />
         )}
         refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={fetchCards} tintColor={colors.dark} />
+          <RefreshControl refreshing={currentLoading} onRefresh={currentRefresh} tintColor={colors.dark} />
         }
         removeClippedSubviews
         maxToRenderPerBatch={10}
+        onEndReached={currentHasMore ? loadNextPage : undefined}
+        onEndReachedThreshold={0.3}
         ListHeaderComponent={
           <FilterChips
             activeFilter={activeFilter}
@@ -404,20 +417,31 @@ export default function HomeScreen() {
             onTemplatePress={() => setShowTemplates(true)}
           />
         }
+        ListFooterComponent={
+          currentHasMore ? (
+            <View style={styles.loadMoreRow}>
+              <Text style={styles.loadMoreText}>Daha fazla yükleniyor...</Text>
+            </View>
+          ) : null
+        }
         ListEmptyComponent={
-          !loading ? (
+          !currentLoading ? (
             <View style={styles.empty}>
-              <Text style={styles.emptyIcon}>💬</Text>
-              <Text style={styles.emptyTitle}>Henüz kart yok</Text>
+              <Text style={styles.emptyIcon}>{isArchiveMode ? '📦' : '💬'}</Text>
+              <Text style={styles.emptyTitle}>{isArchiveMode ? 'Arşiv boş' : 'Henüz kart yok'}</Text>
               <Text style={styles.emptyDesc}>
-                İlk kartınızı oluşturmak için{'\n'}aşağıdaki butona dokunun.
+                {isArchiveMode
+                  ? 'Tamamlanan kartlar 30 gün sonra\notomatik arşivlenir.'
+                  : 'İlk kartınızı oluşturmak için\naşağıdaki butona dokunun.'}
               </Text>
-              <TouchableOpacity
-                style={styles.emptyBtn}
-                onPress={() => router.push('/new')}
-              >
-                <Text style={styles.emptyBtnText}>+ Yeni Kart Oluştur</Text>
-              </TouchableOpacity>
+              {!isArchiveMode && (
+                <TouchableOpacity
+                  style={styles.emptyBtn}
+                  onPress={() => router.push('/new')}
+                >
+                  <Text style={styles.emptyBtnText}>+ Yeni Kart Oluştur</Text>
+                </TouchableOpacity>
+              )}
             </View>
           ) : null
         }
@@ -425,7 +449,7 @@ export default function HomeScreen() {
         contentContainerStyle={openCards.length === 0 ? styles.emptyContainer : undefined}
       />
 
-      {doneCards.length > 0 && activeFilter !== 'done' && (
+      {doneCards.length > 0 && activeFilter !== 'done' && !isArchiveMode && (
         <TouchableOpacity
           style={styles.doneBar}
           activeOpacity={0.7}
@@ -521,6 +545,8 @@ const styles = StyleSheet.create({
   doneText: { fontSize: 14, color: colors.muted, textAlign: 'center' },
   doneArrow: { fontSize: 16, color: colors.muted },
   moodBanner: { borderBottomWidth: 1, borderBottomColor: colors.border },
+  loadMoreRow: { paddingVertical: 16, alignItems: 'center' },
+  loadMoreText: { fontSize: 13, color: colors.muted },
   errorBanner: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     backgroundColor: '#FFF3CD', paddingHorizontal: 16, paddingVertical: 12,
