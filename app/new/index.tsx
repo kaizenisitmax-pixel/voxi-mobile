@@ -190,48 +190,60 @@ export default function NewEntryScreen() {
 
   const stopRecording = async () => {
     const rec = recordingRef.current;
-    if (!rec) return;
+    if (!rec) {
+      console.warn('[stopRecording] rec is null — no active recording');
+      setMode('choose');
+      return;
+    }
 
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
 
+    // Anında processing ekranını göster — kullanıcı "hiçbirşey olmadı" demesin
+    setMode('processing');
+    setSourceType('voice');
+    setCurrentStep('transcribe');
+    setTranscript('');
+
     try {
+      // URI'yi durdurmadan ÖNCE al (iOS compat)
+      const uri = rec.getURI();
       const status = await rec.getStatusAsync();
       const actualDurationMs = status.durationMillis || 0;
-      console.log('[recording] Duration:', actualDurationMs, 'ms');
+      console.log('[recording] Duration:', actualDurationMs, 'ms, uri:', !!uri);
 
       await rec.stopAndUnloadAsync();
       await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
-      const uri = rec.getURI();
       setRecording(null);
       recordingRef.current = null;
 
       if (!uri) {
         setMode('choose');
-        Alert.alert('Hata', 'Ses kaydı alınamadı');
+        Alert.alert('Kayıt Hatası', 'Ses dosyası oluşturulamadı. Tekrar deneyin.');
         return;
       }
 
-      if (actualDurationMs < 800) {
+      if (actualDurationMs < 300) {
         setMode('choose');
-        Alert.alert('Çok Kısa', 'En az 1 saniye konuşun.');
+        Alert.alert('Çok Kısa', 'Daha uzun konuşun ve tekrar deneyin.');
         return;
       }
 
-      if (membership?.workspace_id) {
-        processInput('voice', { fileUri: uri, fileType: 'audio/m4a', fileName: 'recording.m4a' });
-      } else {
+      if (!membership?.workspace_id) {
         setMode('choose');
-        Alert.alert('Hata', 'Workspace bilgisi bulunamadı');
+        Alert.alert('Oturum Hatası', 'Lütfen uygulamayı yeniden başlatın.');
+        return;
       }
+
+      processInput('voice', { fileUri: uri, fileType: 'audio/m4a', fileName: 'recording.m4a' });
     } catch (err) {
       console.error('[recording] Stop error:', err);
       setRecording(null);
       recordingRef.current = null;
       setMode('choose');
-      Alert.alert('Hata', 'Ses kaydı durdurulamadı');
+      Alert.alert('Hata', 'Ses kaydı durdurulamadı. Tekrar deneyin.');
     }
   };
 
@@ -537,6 +549,10 @@ export default function NewEntryScreen() {
               );
             })}
           </View>
+
+          {sourceType === 'voice' && currentStep === 'transcribe' && (
+            <Text style={styles.processingHint}>Ses metne çevriliyor, 15–30 saniye sürebilir</Text>
+          )}
 
           <TouchableOpacity
             style={styles.cancelProcessingBtn}
@@ -1005,7 +1021,8 @@ const styles = StyleSheet.create({
   stepText: { fontSize: 16, color: colors.disabled, fontWeight: '500' },
   stepTextDone: { color: colors.dark, fontWeight: '600' },
   stepTextActive: { color: colors.dark, fontWeight: '600' },
-  cancelProcessingBtn: { marginTop: 16, paddingVertical: 12, paddingHorizontal: 24 },
+  processingHint: { fontSize: 13, color: colors.muted, textAlign: 'center', marginBottom: 16 },
+  cancelProcessingBtn: { marginTop: 8, paddingVertical: 12, paddingHorizontal: 24 },
   cancelProcessingText: { fontSize: 16, fontWeight: '600', color: colors.muted },
 
   // ─── Confirm (Rich) ───
