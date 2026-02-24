@@ -1,6 +1,6 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, ScrollView } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { useState, useCallback, memo, useEffect } from 'react';
+import { useState, useCallback, memo, useEffect, useMemo } from 'react';
 import { useCards, Card, CardMember } from '../../hooks/useCards';
 import { colors } from '../../lib/colors';
 import { getSelectedIndustry } from '../../lib/industryStore';
@@ -10,6 +10,86 @@ import MoodCheckin from '../../components/MoodCheckin';
 import EQCelebration from '../../components/EQCelebration';
 import { useAuth } from '../../contexts/AuthContext';
 import { ONCELIK_RENK, siralaKartlar, type Oncelik } from '../../lib/constants';
+
+// ─── Filtre tanımları ─────────────────────────────────────────────
+type FilterKey = 'all' | 'urgent' | 'active' | 'open' | 'done' | 'mine';
+
+const FILTERS: { key: FilterKey; label: string; emoji: string }[] = [
+  { key: 'all',    label: 'Tümü',     emoji: '🏠' },
+  { key: 'urgent', label: 'Acil',     emoji: '⚡' },
+  { key: 'active', label: 'Aktif',    emoji: '🔄' },
+  { key: 'open',   label: 'Bekleyen', emoji: '⏳' },
+  { key: 'done',   label: 'Biten',    emoji: '✅' },
+  { key: 'mine',   label: 'Kişisel',  emoji: '👤' },
+];
+
+// ─── Filtre Chip'leri ─────────────────────────────────────────────
+const FilterChips = memo(function FilterChips({
+  activeFilter, onSelect, cards, currentUserId,
+}: {
+  activeFilter: FilterKey;
+  onSelect: (f: FilterKey) => void;
+  cards: Card[];
+  currentUserId?: string | null;
+}) {
+  const counts: Record<FilterKey, number> = {
+    all:    cards.filter(c => c.status !== 'done' && c.status !== 'cancelled').length,
+    urgent: cards.filter(c => c.priority === 'urgent' && c.status !== 'done').length,
+    active: cards.filter(c => c.status === 'in_progress').length,
+    open:   cards.filter(c => c.status === 'open' || c.status === 'waiting').length,
+    done:   cards.filter(c => c.status === 'done').length,
+    mine:   cards.filter(c => currentUserId && c.card_members?.some((m: any) => m.user_id === currentUserId)).length,
+  };
+
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={chipStyles.row}
+      style={chipStyles.wrap}
+    >
+      {FILTERS.map(f => {
+        const isActive = activeFilter === f.key;
+        const count    = counts[f.key];
+        return (
+          <TouchableOpacity
+            key={f.key}
+            onPress={() => onSelect(f.key)}
+            style={[chipStyles.chip, isActive && chipStyles.chipActive]}
+            activeOpacity={0.7}
+          >
+            <Text style={chipStyles.chipEmoji}>{f.emoji}</Text>
+            <Text style={[chipStyles.chipLabel, isActive && chipStyles.chipLabelActive]}>
+              {f.label}
+            </Text>
+            {count > 0 && (
+              <View style={[chipStyles.badge, isActive && chipStyles.badgeActive, f.key === 'urgent' && chipStyles.badgeUrgent]}>
+                <Text style={[chipStyles.badgeText, isActive && chipStyles.badgeTextActive]}>
+                  {count}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
+  );
+});
+
+const chipStyles = StyleSheet.create({
+  wrap:           { backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border },
+  row:            { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8, gap: 6 },
+  chip:           { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.border },
+  chipActive:     { backgroundColor: colors.dark, borderColor: colors.dark },
+  chipEmoji:      { fontSize: 14 },
+  chipLabel:      { fontSize: 13, fontWeight: '600', color: colors.text },
+  chipLabelActive:{ color: '#fff' },
+  badge:          { minWidth: 18, height: 18, borderRadius: 9, backgroundColor: colors.border, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  badgeActive:    { backgroundColor: 'rgba(255,255,255,0.25)' },
+  badgeUrgent:    { backgroundColor: '#FFEEEE' },
+  badgeText:      { fontSize: 10, fontWeight: '800', color: colors.text },
+  badgeTextActive:{ color: '#fff' },
+});
 
 function getInitials(name: string): string {
   return name
@@ -178,11 +258,12 @@ type Celebration = { type: 'work_anniversary' | 'milestone' | 'birthday'; name: 
 export default function HomeScreen() {
   const router = useRouter();
   const { cards, loading, error, fetchCards } = useCards();
-  const { membership } = useAuth();
+  const { membership, user } = useAuth();
   const [industry, setIndustry] = useState<Industry | null>(null);
   const [showMood, setShowMood] = useState(false);
   const [celebrations, setCelebrations] = useState<Celebration[]>([]);
   const [showCelebrations, setShowCelebrations] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
 
   // Check if mood check-in was done today
   useEffect(() => {
@@ -205,8 +286,24 @@ export default function HomeScreen() {
   );
 
   const { acikKartlar, tamamlananKartlar } = siralaKartlar(cards);
-  const openCards = acikKartlar;
-  const doneCards = tamamlananKartlar;
+
+  // Filtre uygula
+  const filteredOpen = useMemo(() => {
+    const currentUserId = user?.id;
+    switch (activeFilter) {
+      case 'urgent': return acikKartlar.filter(c => c.priority === 'urgent');
+      case 'active': return acikKartlar.filter(c => c.status === 'in_progress');
+      case 'open':   return acikKartlar.filter(c => c.status === 'open' || c.status === 'waiting');
+      case 'done':   return tamamlananKartlar;
+      case 'mine':   return [...acikKartlar, ...tamamlananKartlar].filter(c =>
+        currentUserId && c.card_members?.some((m: any) => m.user_id === currentUserId)
+      );
+      default:       return acikKartlar;
+    }
+  }, [acikKartlar, tamamlananKartlar, activeFilter, user?.id]);
+
+  const openCards = filteredOpen;
+  const doneCards = activeFilter === 'done' ? [] : tamamlananKartlar;
 
   const handleMoodClose = async () => {
     const today = new Date().toISOString().split('T')[0];
@@ -256,7 +353,17 @@ export default function HomeScreen() {
         }
         removeClippedSubviews
         maxToRenderPerBatch={10}
-        ListHeaderComponent={<QuickActions industry={industry} />}
+        ListHeaderComponent={
+          <>
+            <FilterChips
+              activeFilter={activeFilter}
+              onSelect={setActiveFilter}
+              cards={cards}
+              currentUserId={user?.id}
+            />
+            <QuickActions industry={industry} />
+          </>
+        }
         ListEmptyComponent={
           !loading ? (
             <View style={styles.empty}>
@@ -278,11 +385,13 @@ export default function HomeScreen() {
         contentContainerStyle={openCards.length === 0 ? styles.emptyContainer : undefined}
       />
 
-      {doneCards.length > 0 && (
-        <TouchableOpacity style={styles.doneBar} activeOpacity={0.7}>
-          <Text style={styles.doneText}>
-            ✓ {doneCards.length} tamamlanan iş
-          </Text>
+      {doneCards.length > 0 && activeFilter !== 'done' && (
+        <TouchableOpacity
+          style={styles.doneBar}
+          activeOpacity={0.7}
+          onPress={() => setActiveFilter('done')}
+        >
+          <Text style={styles.doneText}>✓ {doneCards.length} tamamlanan iş</Text>
           <Text style={styles.doneArrow}>›</Text>
         </TouchableOpacity>
       )}
