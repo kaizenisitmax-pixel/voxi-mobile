@@ -628,7 +628,13 @@ export default function NewEntryScreen() {
                 Keyboard.dismiss();
                 const finalPurpose = purpose.trim();
                 if (finalPurpose) {
-                  processInput(sourceType, {}, finalPurpose);
+                  // Dosyayı yeniden yüklemek yerine mevcut transcript + amaç = metin olarak gönder
+                  // Bu yöntem her zaman çalışır, dosya URI geçerliliğine bağımlı değil
+                  const combinedText = [
+                    transcript ? `İçerik: ${transcript}` : null,
+                    `Kullanıcı amacı: ${finalPurpose}`,
+                  ].filter(Boolean).join('\n\n');
+                  processInput('text', { text: combinedText }, finalPurpose);
                 } else {
                   setMode('confirm');
                 }
