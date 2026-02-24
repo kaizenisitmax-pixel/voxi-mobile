@@ -1,10 +1,14 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, ScrollView } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { useState, useCallback, memo } from 'react';
+import { useState, useCallback, memo, useEffect } from 'react';
 import { useCards, Card, CardMember } from '../../hooks/useCards';
 import { colors } from '../../lib/colors';
 import { getSelectedIndustry } from '../../lib/industryStore';
 import type { Industry } from '../../lib/industries';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import MoodCheckin from '../../components/MoodCheckin';
+import EQCelebration from '../../components/EQCelebration';
+import { useAuth } from '../../contexts/AuthContext';
 
 function getInitials(name: string): string {
   return name
@@ -184,10 +188,29 @@ function QuickActions({ industry }: { industry: Industry | null }) {
   );
 }
 
+type Celebration = { type: 'work_anniversary' | 'milestone' | 'birthday'; name: string; message: string; emoji: string };
+
 export default function HomeScreen() {
   const router = useRouter();
   const { cards, loading, error, fetchCards } = useCards();
+  const { membership } = useAuth();
   const [industry, setIndustry] = useState<Industry | null>(null);
+  const [showMood, setShowMood] = useState(false);
+  const [celebrations, setCelebrations] = useState<Celebration[]>([]);
+  const [showCelebrations, setShowCelebrations] = useState(false);
+
+  // Check if mood check-in was done today
+  useEffect(() => {
+    const checkMoodToday = async () => {
+      const today = new Date().toISOString().split('T')[0];
+      const lastMood = await AsyncStorage.getItem('voxi_last_mood_date');
+      if (lastMood !== today) {
+        // Show after 2 seconds delay to not interrupt loading
+        setTimeout(() => setShowMood(true), 2000);
+      }
+    };
+    checkMoodToday();
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -199,14 +222,40 @@ export default function HomeScreen() {
   const openCards = cards.filter(c => c.status !== 'done');
   const doneCards = cards.filter(c => c.status === 'done');
 
+  const handleMoodClose = async () => {
+    const today = new Date().toISOString().split('T')[0];
+    await AsyncStorage.setItem('voxi_last_mood_date', today);
+    setShowMood(false);
+  };
+
   return (
     <View style={styles.container}>
+      {/* EQ: Kompakt mood check-in banner (bugün yapılmadıysa) */}
+      {showMood && membership?.workspace_id && (
+        <View style={styles.moodBanner}>
+          <MoodCheckin
+            workspaceId={membership.workspace_id}
+            onClose={handleMoodClose}
+            compact
+          />
+        </View>
+      )}
+
       {error && (
         <TouchableOpacity style={styles.errorBanner} onPress={fetchCards}>
           <Text style={styles.errorText}>⚠️ {error}</Text>
           <Text style={styles.errorRetry}>Tekrar dene</Text>
         </TouchableOpacity>
       )}
+
+      {/* EQ: Kutlamalar */}
+      {celebrations.length > 0 && (
+        <EQCelebration
+          celebrations={celebrations}
+          onClose={() => { setCelebrations([]); setShowCelebrations(false); }}
+        />
+      )}
+
       <FlatList
         data={openCards}
         keyExtractor={item => item.id}
@@ -296,6 +345,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.card,
   },
   doneText: { fontSize: 14, color: colors.muted, textAlign: 'center' },
+  moodBanner: { borderBottomWidth: 1, borderBottomColor: colors.border },
   quickActionsWrap: {
     paddingVertical: 12, backgroundColor: colors.card,
     borderBottomWidth: 1, borderBottomColor: colors.border,

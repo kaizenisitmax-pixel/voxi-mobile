@@ -1,7 +1,7 @@
 import { supabase } from './supabase';
 import * as FileSystem from 'expo-file-system/legacy';
 
-const WEB_API = 'https://voxi-web-production.vercel.app';
+export const WEB_API = 'https://voxi-web-production.vercel.app';
 
 export type SmartCreateResult = {
   title: string;
@@ -92,6 +92,69 @@ export async function smartCreate(
     }
     throw new Error(errorMsg);
   }
+
+  return await response.json();
+}
+
+export type VoxiChatMessage = { role: 'user' | 'assistant'; content: string };
+
+export type VoxiChatResponse = {
+  message: string;
+  actions: unknown[];
+  suggestions: string[];
+  eq: {
+    tone: string;
+    milestone: { count: number; message: string; emoji: string } | null;
+  };
+};
+
+export async function voxiChat(
+  messages: VoxiChatMessage[],
+  workspaceId: string,
+  teamId: string,
+  industryId?: number | null
+): Promise<VoxiChatResponse> {
+  const session = (await supabase.auth.getSession()).data.session;
+  if (!session) throw new Error('Oturum bulunamadı');
+
+  const fetchPromise = fetch(`${WEB_API}/api/chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({ messages, workspaceId, teamId, industryId }),
+  });
+
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('VOXI yanıt vermedi. Tekrar deneyin.')), 30000)
+  );
+
+  const response = await Promise.race([fetchPromise, timeoutPromise]);
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || `Hata (${response.status})`);
+  }
+
+  return await response.json();
+}
+
+export async function submitMoodCheckin(
+  workspaceId: string,
+  level: 1 | 2 | 3 | 4 | 5
+): Promise<{ voxi_response: string }> {
+  const session = (await supabase.auth.getSession()).data.session;
+  if (!session) throw new Error('Oturum bulunamadı');
+
+  const response = await fetch(`${WEB_API}/api/eq/mood`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({ workspaceId, level }),
+  });
 
   return await response.json();
 }
