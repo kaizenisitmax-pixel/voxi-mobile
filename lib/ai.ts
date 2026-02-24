@@ -102,6 +102,7 @@ export async function smartCreate(
   payload: { fileUri?: string; text?: string; fileType?: string; fileName?: string },
   workspaceId: string,
   industryId?: number | null,
+  userPurpose?: string,
 ): Promise<SmartCreateResult> {
   const session = (await supabase.auth.getSession()).data.session;
   if (!session) throw new Error('Oturum bulunamadı');
@@ -110,6 +111,7 @@ export async function smartCreate(
     type,
     workspace_id: workspaceId,
     industryId: industryId ?? undefined,
+    userPurpose: userPurpose ?? undefined,
   };
 
   if ((type === 'voice' || type === 'photo' || type === 'document') && payload.fileUri) {

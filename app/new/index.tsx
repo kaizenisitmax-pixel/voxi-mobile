@@ -10,16 +10,17 @@ import { Audio } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Speech from 'expo-speech';
+import * as FileSystem from 'expo-file-system';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCards } from '../../hooks/useCards';
 import { supabase } from '../../lib/supabase';
-import { smartCreate, SmartCreateResult } from '../../lib/ai';
+import { smartCreate, SmartCreateResult, WEB_API } from '../../lib/ai';
 import { colors } from '../../lib/colors';
 import { getSelectedIndustryId } from '../../lib/industryStore';
 import TemplateSheet from '../../components/TemplateSheet';
-import type { Industry } from '../../lib/industries';
 
-type Mode = 'choose' | 'recording' | 'processing' | 'confirm' | 'creating' | 'done' | 'error' | 'text';
+
+type Mode = 'choose' | 'recording' | 'processing' | 'purpose_ask' | 'purpose_recording' | 'confirm' | 'creating' | 'done' | 'error' | 'text';
 type ProcessStep = 'transcribe' | 'analyze' | 'done';
 
 const STEP_LABELS: Record<string, Record<ProcessStep, string>> = {
@@ -77,9 +78,16 @@ export default function NewEntryScreen() {
   const [createdCardTitle, setCreatedCardTitle] = useState('');
   const [showTemplates, setShowTemplates] = useState(false);
   const [industryId, setIndustryId] = useState<number | null>(null);
+  const [purpose, setPurpose] = useState('');
+
+  const [purposeRecordingSeconds, setPurposeRecordingSeconds] = useState(0);
+  const [isPurposeRecording, setIsPurposeRecording] = useState(false);
+  const lastPayloadRef = useRef<{ type: 'voice' | 'photo' | 'text' | 'document'; payload: { fileUri?: string; text?: string; fileType?: string; fileName?: string } } | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingRef = useRef<Audio.Recording | null>(null);
+  const purposeRecordingRef = useRef<Audio.Recording | null>(null);
+  const purposeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -108,13 +116,41 @@ export default function NewEntryScreen() {
 
   const speak = async (text: string) => {
     try {
-      const voices = await Speech.getAvailableVoicesAsync();
-      const turkishVoice = voices.find(v =>
-        v.language === 'tr-TR' && v.quality === Speech.VoiceQuality.Enhanced
-      ) || voices.find(v => v.language === 'tr-TR');
-      Speech.speak(text, { language: 'tr-TR', rate: 0.92, pitch: 1.05, voice: turkishVoice?.identifier });
+      const session = await supabase.auth.getSession();
+      const accessToken = session.data.session?.access_token;
+      if (!accessToken) throw new Error('No session');
+
+      const res = await fetch(`${WEB_API}/api/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!res.ok) throw new Error('TTS API failed');
+
+      const { audioBase64 } = await res.json();
+      const tempUri = FileSystem.documentDirectory + 'voxi_tts.mp3';
+      await FileSystem.writeAsStringAsync(tempUri, audioBase64, { encoding: FileSystem.EncodingType.Base64 });
+
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+      const { sound } = await Audio.Sound.createAsync({ uri: tempUri });
+      await sound.playAsync();
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) {
+          sound.unloadAsync();
+        }
+      });
     } catch {
-      Speech.speak(text, { language: 'tr-TR', rate: 0.92, pitch: 1.05 });
+      // Fallback to device TTS
+      try {
+        const voices = await Speech.getAvailableVoicesAsync();
+        const turkishVoice = voices.find(v =>
+          v.language === 'tr-TR' && v.quality === Speech.VoiceQuality.Enhanced
+        ) || voices.find(v => v.language === 'tr-TR');
+        Speech.speak(text, { language: 'tr-TR', rate: 1.0, pitch: 0.9, voice: turkishVoice?.identifier });
+      } catch {
+        Speech.speak(text, { language: 'tr-TR', rate: 1.0, pitch: 0.9 });
+      }
     }
   };
 
@@ -230,30 +266,101 @@ export default function NewEntryScreen() {
 
   const processInput = async (
     type: 'voice' | 'photo' | 'text' | 'document',
-    payload: { fileUri?: string; text?: string; fileType?: string; fileName?: string }
+    payload: { fileUri?: string; text?: string; fileType?: string; fileName?: string },
+    userPurpose?: string,
   ) => {
+    // If re-running with purpose but no payload, use last saved payload
+    const effectivePayload = (userPurpose && !payload.fileUri && !payload.text && lastPayloadRef.current)
+      ? lastPayloadRef.current.payload
+      : payload;
+    const effectiveType = (userPurpose && !payload.fileUri && !payload.text && lastPayloadRef.current)
+      ? lastPayloadRef.current.type
+      : type;
+
+    // Save payload for potential purpose re-run
+    if (!userPurpose) {
+      lastPayloadRef.current = { type, payload };
+    }
+
     setMode('processing');
-    setSourceType(type);
+    setSourceType(effectiveType);
     setCurrentStep('transcribe');
     setTranscript('');
 
     try {
-      const result = await smartCreate(type, payload, membership!.workspace_id, industryId);
+      const result = await smartCreate(effectiveType, effectivePayload, membership!.workspace_id, industryId, userPurpose);
       console.log('[processInput] AI result:', JSON.stringify(result).slice(0, 400));
 
       setAiResult(result);
-      setTranscript(result.transcript || payload.text || payload.fileName || '');
+      setTranscript(result.transcript || effectivePayload.text || effectivePayload.fileName || '');
       setCurrentStep('analyze');
 
       await new Promise(r => setTimeout(r, 600));
       setCurrentStep('done');
 
       await new Promise(r => setTimeout(r, 400));
-      setMode('confirm');
+
+      // After initial analysis (no purpose yet), ask user for purpose
+      // Skip purpose_ask if this is already a purpose-refined call or plain text
+      if (!userPurpose && type !== 'text') {
+        setPurpose('');
+        setMode('purpose_ask');
+      } else {
+        setMode('confirm');
+      }
     } catch (err: any) {
       console.error('[processInput] Error:', err);
       setErrorMessage(err.message || 'Bir hata oluştu');
       setMode('error');
+    }
+  };
+
+  // ═══════════════════════════
+  //   PURPOSE VOICE RECORDING
+  // ═══════════════════════════
+
+  const startPurposeRecording = async () => {
+    try {
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording: rec } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      purposeRecordingRef.current = rec;
+      setPurposeRecordingSeconds(0);
+      setIsPurposeRecording(true);
+      purposeTimerRef.current = setInterval(() => setPurposeRecordingSeconds(p => p + 1), 1000);
+    } catch {
+      Alert.alert('Hata', 'Ses kaydı başlatılamadı');
+    }
+  };
+
+  const stopPurposeRecording = async () => {
+    if (purposeTimerRef.current) { clearInterval(purposeTimerRef.current); purposeTimerRef.current = null; }
+    const rec = purposeRecordingRef.current;
+    if (!rec) return;
+    try {
+      await rec.stopAndUnloadAsync();
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      const uri = rec.getURI();
+      purposeRecordingRef.current = null;
+      setIsPurposeRecording(false);
+      if (!uri) return;
+
+      // Transcribe the voice purpose
+      const session = await supabase.auth.getSession();
+      const accessToken = session.data.session?.access_token;
+      const formData = new FormData();
+      formData.append('file', { uri, type: 'audio/m4a', name: 'purpose.m4a' } as any);
+      const res = await fetch(`${WEB_API}/api/transcribe`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${accessToken}` },
+        body: formData,
+      });
+      if (res.ok) {
+        const { transcript: t } = await res.json();
+        if (t) setPurpose(t);
+      }
+    } catch (err) {
+      console.error('[purposeRecording] Error:', err);
+      setIsPurposeRecording(false);
     }
   };
 
@@ -454,6 +561,89 @@ export default function NewEntryScreen() {
             <Text style={styles.cancelProcessingText}>İptal</Text>
           </TouchableOpacity>
         </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ─── PURPOSE ASK ───
+  if (mode === 'purpose_ask') {
+    const meta = SOURCE_META[sourceType];
+    return (
+      <SafeAreaView style={styles.container}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <View style={styles.purposeContainer}>
+            {/* Header */}
+            <View style={styles.purposeHeader}>
+              <TouchableOpacity onPress={() => setMode('confirm')}>
+                <Text style={styles.purposeSkip}>Atla →</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Icon + transcript preview */}
+            <View style={styles.purposeTop}>
+              <View style={styles.purposeIconWrap}>
+                <Text style={styles.purposeIcon}>{meta.icon}</Text>
+              </View>
+              <Text style={styles.purposeTitle}>Bu ne için?</Text>
+              <Text style={styles.purposeSubtitle}>
+                VOXI içeriği analiz etti. Doğru kart oluşturabilmem için{'\n'}bu kaydın amacını söyler misin?
+              </Text>
+
+              {/* Transcript preview */}
+              {transcript ? (
+                <View style={styles.purposeTranscriptBox}>
+                  <Text style={styles.purposeTranscriptText} numberOfLines={3}>
+                    {sourceType === 'voice' ? `"${transcript}"` : transcript}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+
+            {/* Text input */}
+            <View style={styles.purposeInputWrap}>
+              <TextInput
+                style={styles.purposeInput}
+                value={purpose}
+                onChangeText={setPurpose}
+                placeholder="Örnek: ofise aldığımız koltuk takımının belgesi..."
+                placeholderTextColor={colors.muted}
+                multiline
+                autoFocus
+              />
+
+              {/* Voice record button for purpose */}
+              <TouchableOpacity
+                style={[styles.purposeMicBtn, isPurposeRecording && styles.purposeMicBtnActive]}
+                onPress={isPurposeRecording ? stopPurposeRecording : startPurposeRecording}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.purposeMicIcon}>{isPurposeRecording ? '⏹' : '🎤'}</Text>
+                <Text style={styles.purposeMicLabel}>
+                  {isPurposeRecording ? `${purposeRecordingSeconds}s • Bitir` : 'Sesle Söyle'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Submit */}
+            <TouchableOpacity
+              style={[styles.purposeSubmitBtn, !purpose.trim() && styles.purposeSubmitBtnDisabled]}
+              onPress={() => {
+                const finalPurpose = purpose.trim();
+                if (finalPurpose) {
+                  // Re-run with purpose
+                  processInput(sourceType, {}, finalPurpose);
+                } else {
+                  setMode('confirm');
+                }
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.purposeSubmitText}>
+                {purpose.trim() ? 'VOXI Yeniden Analiz Etsin' : 'Geç, Devam Et'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     );
   }
@@ -734,18 +924,13 @@ export default function NewEntryScreen() {
           <Text style={styles.secondaryIcon}>✏️</Text>
           <Text style={styles.secondaryLabel}>Yaz</Text>
         </TouchableOpacity>
-      </View>
 
-      {/* Template button */}
-      <TouchableOpacity
-        style={styles.templateBar}
-        onPress={() => setShowTemplates(true)}
-        activeOpacity={0.7}
-      >
-        <Text style={styles.templateBarIcon}>📋</Text>
-        <Text style={styles.templateBarText}>Hazır Şablonlar</Text>
-        <Text style={styles.templateBarArrow}>→</Text>
-      </TouchableOpacity>
+        {/* Şablonlar — hamburger */}
+        <TouchableOpacity style={styles.secondaryBtn} onPress={() => setShowTemplates(true)}>
+          <Text style={styles.secondaryIcon}>📋</Text>
+          <Text style={styles.secondaryLabel}>Şablon</Text>
+        </TouchableOpacity>
+      </View>
 
       <TemplateSheet
         visible={showTemplates}
@@ -777,21 +962,13 @@ const styles = StyleSheet.create({
   bigMicEmoji: { fontSize: 56 },
   bigMicLabel: { fontSize: 20, fontWeight: '700', color: colors.dark, marginBottom: 6 },
   bigMicHint: { fontSize: 14, color: colors.muted },
-  secondaryRow: { flexDirection: 'row', justifyContent: 'center', gap: 16, paddingHorizontal: 24, paddingBottom: 32 },
-  secondaryBtn: { alignItems: 'center', gap: 6, width: 72 },
+  secondaryRow: { flexDirection: 'row', justifyContent: 'center', gap: 10, paddingHorizontal: 16, paddingBottom: 32 },
+  secondaryBtn: { alignItems: 'center', gap: 6, width: 64 },
   secondaryIcon: {
-    fontSize: 28, width: 56, height: 56, lineHeight: 56, textAlign: 'center',
-    backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.border, overflow: 'hidden',
+    fontSize: 24, width: 52, height: 52, lineHeight: 52, textAlign: 'center',
+    backgroundColor: colors.card, borderRadius: 14, borderWidth: 1, borderColor: colors.border, overflow: 'hidden',
   },
   secondaryLabel: { fontSize: 12, fontWeight: '600', color: colors.text },
-  templateBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    marginHorizontal: 24, marginBottom: 20, paddingVertical: 14, paddingHorizontal: 18,
-    backgroundColor: colors.card, borderRadius: 14, borderWidth: 1, borderColor: colors.border,
-  },
-  templateBarIcon: { fontSize: 20 },
-  templateBarText: { flex: 1, fontSize: 15, fontWeight: '600', color: colors.dark },
-  templateBarArrow: { fontSize: 16, color: colors.muted },
 
   // ─── Recording ───
   recordingContainer: { flex: 1, padding: 24 },
@@ -946,4 +1123,44 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.card,
   },
   textArea: { flex: 1, padding: 20, fontSize: 16, color: colors.dark, lineHeight: 24 },
+
+  // ─── Purpose Ask ───
+  purposeContainer: { flex: 1, padding: 24 },
+  purposeHeader: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 8 },
+  purposeSkip: { fontSize: 15, fontWeight: '600', color: colors.muted },
+  purposeTop: { alignItems: 'center', paddingTop: 12, paddingBottom: 24 },
+  purposeIconWrap: {
+    width: 72, height: 72, borderRadius: 36, backgroundColor: colors.card,
+    borderWidth: 1, borderColor: colors.border,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 16,
+  },
+  purposeIcon: { fontSize: 32 },
+  purposeTitle: { fontSize: 22, fontWeight: '800', color: colors.dark, marginBottom: 8 },
+  purposeSubtitle: { fontSize: 14, color: colors.muted, textAlign: 'center', lineHeight: 20 },
+  purposeTranscriptBox: {
+    marginTop: 16, backgroundColor: colors.card,
+    borderRadius: 12, padding: 12, width: '100%',
+    borderWidth: 1, borderColor: colors.border,
+  },
+  purposeTranscriptText: { fontSize: 13, color: colors.text, lineHeight: 18, fontStyle: 'italic' },
+  purposeInputWrap: { gap: 12, marginBottom: 20 },
+  purposeInput: {
+    backgroundColor: colors.card, borderRadius: 14, borderWidth: 1, borderColor: colors.border,
+    paddingHorizontal: 16, paddingVertical: 14,
+    fontSize: 15, color: colors.dark, minHeight: 80, textAlignVertical: 'top',
+  },
+  purposeMicBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: colors.card, borderRadius: 14, borderWidth: 1, borderColor: colors.border,
+    paddingVertical: 14,
+  },
+  purposeMicBtnActive: { backgroundColor: colors.danger + '15', borderColor: colors.danger },
+  purposeMicIcon: { fontSize: 20 },
+  purposeMicLabel: { fontSize: 14, fontWeight: '600', color: colors.dark },
+  purposeSubmitBtn: {
+    backgroundColor: colors.dark, borderRadius: 16, paddingVertical: 18,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  purposeSubmitBtnDisabled: { backgroundColor: colors.disabled },
+  purposeSubmitText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
 });

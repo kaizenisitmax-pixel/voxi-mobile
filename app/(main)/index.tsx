@@ -17,7 +17,7 @@ type FilterKey = 'all' | 'urgent' | 'active' | 'open' | 'done' | 'mine';
 const FILTERS: { key: FilterKey; label: string; emoji: string }[] = [
   { key: 'all',    label: 'Tümü',     emoji: '🏠' },
   { key: 'urgent', label: 'Acil',     emoji: '⚡' },
-  { key: 'active', label: 'Aktif',    emoji: '🔄' },
+  { key: 'active', label: 'En Son',   emoji: '🕐' },
   { key: 'open',   label: 'Bekleyen', emoji: '⏳' },
   { key: 'done',   label: 'Biten',    emoji: '✅' },
   { key: 'mine',   label: 'Kişisel',  emoji: '👤' },
@@ -35,7 +35,7 @@ const FilterChips = memo(function FilterChips({
   const counts: Record<FilterKey, number> = {
     all:    cards.filter(c => c.status !== 'done' && c.status !== 'cancelled').length,
     urgent: cards.filter(c => c.priority === 'urgent' && c.status !== 'done').length,
-    active: cards.filter(c => c.status === 'in_progress').length,
+    active: Math.min(cards.length, 10),
     open:   cards.filter(c => c.status === 'open' || c.status === 'waiting').length,
     done:   cards.filter(c => c.status === 'done').length,
     mine:   cards.filter(c => currentUserId && c.card_members?.some((m: any) => m.user_id === currentUserId)).length,
@@ -292,7 +292,7 @@ export default function HomeScreen() {
     const currentUserId = user?.id;
     switch (activeFilter) {
       case 'urgent': return acikKartlar.filter(c => c.priority === 'urgent');
-      case 'active': return acikKartlar.filter(c => c.status === 'in_progress');
+      case 'active': return [...cards].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 10);
       case 'open':   return acikKartlar.filter(c => c.status === 'open' || c.status === 'waiting');
       case 'done':   return tamamlananKartlar;
       case 'mine':   return [...acikKartlar, ...tamamlananKartlar].filter(c =>
