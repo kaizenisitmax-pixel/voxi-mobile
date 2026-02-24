@@ -118,25 +118,27 @@ export default function NewEntryScreen() {
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
-  // TTS — OpenAI echo sesiyle (premium), başarısız olursa expo-speech fallback
+  // TTS — OpenAI echo (premium erkek ses), başarısız olursa expo-speech fallback
   const speak = (text: string): Promise<void> => {
     return new Promise(resolve => {
       (async () => {
-        // Ses oynatma moduna geç
+        let soundRef: Audio.Sound | null = null;
+
+        // Oynatma moduna geç
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false,
           playsInSilentModeIOS: true,
           staysActiveInBackground: false,
         }).catch(() => {});
 
-        // Önce OpenAI TTS dene (echo sesi — premium, Türkçe)
         try {
           const session = await supabase.auth.getSession();
           const accessToken = session.data.session?.access_token;
-          if (!accessToken) throw new Error('no session');
+          if (!accessToken) throw new Error('oturum-yok');
 
+          // OpenAI TTS isteği
           const controller = new AbortController();
-          const tid = setTimeout(() => controller.abort(), 12_000);
+          const tid = setTimeout(() => controller.abort(), 15_000);
           let ttsRes: Response;
           try {
             ttsRes = await fetch(`${WEB_API}/api/tts`, {
@@ -152,51 +154,69 @@ export default function NewEntryScreen() {
             clearTimeout(tid);
           }
 
-          if (!ttsRes.ok) throw new Error(`TTS ${ttsRes.status}`);
-          const { audioBase64 } = await ttsRes.json() as { audioBase64?: string };
-          if (!audioBase64) throw new Error('empty audio');
+          if (!ttsRes.ok) {
+            const body = await ttsRes.text().catch(() => '');
+            throw new Error(`HTTP-${ttsRes.status}: ${body.slice(0, 120)}`);
+          }
 
-          // Geçici dosyaya yaz ve çal
+          const data = await ttsRes.json() as { audioBase64?: string };
+          if (!data.audioBase64) throw new Error('bos-ses-verisi');
+
+          // MP3 dosyasını cache'e yaz
           const tempUri = `${FileSystem.cacheDirectory}voxi_tts_${Date.now()}.mp3`;
-          await FileSystem.writeAsStringAsync(tempUri, audioBase64, { encoding: 'base64' as any });
+          await FileSystem.writeAsStringAsync(tempUri, data.audioBase64, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
 
-          const { sound } = await Audio.Sound.createAsync(
-            { uri: tempUri },
-            { shouldPlay: true, volume: 1.0 },
-          );
+          // Yükle, sonra ayrıca çal (shouldPlay:true yerine explicit playAsync)
+          const { sound } = await Audio.Sound.createAsync({ uri: tempUri });
+          soundRef = sound;
 
-          let done = false;
+          let finished = false;
           const finish = () => {
-            if (done) return;
-            done = true;
-            sound.unloadAsync().catch(() => {});
+            if (finished) return;
+            finished = true;
+            soundRef?.unloadAsync().catch(() => {});
+            soundRef = null;
             FileSystem.deleteAsync(tempUri, { idempotent: true }).catch(() => {});
             resolve();
           };
 
-          sound.setOnPlaybackStatusUpdate(status => {
-            if (status.isLoaded && status.didJustFinish) finish();
+          sound.setOnPlaybackStatusUpdate(s => {
+            if (s.isLoaded && s.didJustFinish) finish();
           });
-          setTimeout(finish, 15_000); // max 15 saniye
-          return;
+
+          await sound.playAsync();
+          setTimeout(finish, 20_000); // güvenlik timeout
+          return; // expo-speech'e düşme
+
         } catch (err) {
-          console.warn('[speak] OpenAI TTS failed, expo-speech fallback:', err);
+          soundRef?.unloadAsync().catch(() => {});
+          soundRef = null;
+          // Hata mesajını kullanıcıya göster (debug)
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn('[speak] OpenAI TTS hata:', msg);
+          Alert.alert(
+            'Ses Hatası (Debug)',
+            `OpenAI TTS başarısız:\n${msg}\n\nCihaz sesi kullanılıyor.`,
+            [{ text: 'Tamam' }],
+          );
         }
 
-        // Fallback: expo-speech (cihaz TTS)
-        await new Promise(r => setTimeout(r, 400));
+        // expo-speech fallback
+        await new Promise(r => setTimeout(r, 300));
         Speech.stop();
-        const trySpeak = (lang?: string) => {
+        const tryLocal = (lang?: string) => {
           Speech.speak(text, {
             language: lang,
             rate: 1.0,
             pitch: 0.85,
             onDone: resolve,
             onStopped: resolve,
-            onError: () => (lang ? trySpeak(undefined) : resolve()),
+            onError: () => (lang ? tryLocal(undefined) : resolve()),
           });
         };
-        trySpeak('tr-TR');
+        tryLocal('tr-TR');
       })();
     });
   };
