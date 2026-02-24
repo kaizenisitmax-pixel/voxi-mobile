@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, Linking } from 'react-native';
+// Alert sadece çıkış onayı için tutuluyor
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../contexts/AuthContext';
 import { colors } from '../../lib/colors';
@@ -76,8 +77,8 @@ export default function SettingsScreen() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Hesap</Text>
-          <SettingItem label="Profil Düzenle" onPress={() => Alert.alert('Profil Düzenle', 'Bu özellik yakında gelecek.')} />
-          <SettingItem label="Bildirim Tercihleri" onPress={() => Alert.alert('Bildirim Tercihleri', 'Bu özellik yakında gelecek.')} />
+          <SettingItem label="Profil Düzenle" onPress={() => router.push('/profile-edit')} />
+          <SettingItem label="Bildirim Tercihleri" onPress={() => router.push('/notification-settings')} />
         </View>
 
         <View style={styles.section}>
@@ -85,10 +86,12 @@ export default function SettingsScreen() {
           <SettingItem
             label="Sektör Şablonları"
             value={selectedIndustry ? `${selectedIndustry.templates.length} şablon` : 'Sektör seçin'}
+            onPress={() => router.push('/industry-detail?mode=templates')}
           />
           <SettingItem
             label="Hızlı Aksiyonlar"
             value={selectedIndustry ? `${selectedIndustry.quickActions.length} aksiyon` : 'Sektör seçin'}
+            onPress={() => router.push('/industry-detail?mode=quickactions')}
           />
         </View>
 
