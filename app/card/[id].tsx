@@ -12,6 +12,7 @@ import { useDepot } from '../../hooks/useDepot';
 import { colors } from '../../lib/colors';
 import AddMemberModal from '../../components/AddMemberModal';
 import type { Card, CardMember } from '../../hooks/useCards';
+import { ONCELIK_ETIKET, KART_DURUMU_ETIKET, ROL_ETIKET, type Oncelik, type KartDurumu, type Rol } from '../../lib/constants';
 
 type Tab = 'chat' | 'depot';
 
@@ -129,8 +130,10 @@ export default function CardDetailScreen() {
           <Text style={styles.headerTitle} numberOfLines={1}>{card.title}</Text>
           <View style={styles.headerMeta}>
             <Text style={styles.headerSub} numberOfLines={1}>
-              {card.customers?.company_name || card.status}
-              {card.priority === 'urgent' ? ' · Acil' : ''}
+              {card.customers?.company_name || KART_DURUMU_ETIKET[card.status as KartDurumu] || card.status}
+              {card.priority !== 'normal' && card.priority !== 'low'
+                ? ` · ${ONCELIK_ETIKET[card.priority as Oncelik] || card.priority}`
+                : ''}
             </Text>
           </View>
           {/* Member avatars row */}
@@ -282,7 +285,7 @@ function MessageBubble({ message, isMe }: { message: ChatMessage; isMe: boolean 
     return (
       <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleOther]}>
         {!isMe && <Text style={styles.senderName}>{senderName}</Text>}
-        <Text style={styles.voiceLabel}>🎤 Ses kaydi {message.duration ? `(${Math.floor(message.duration / 60)}:${String(message.duration % 60).padStart(2, '0')})` : ''}</Text>
+        <Text style={styles.voiceLabel}>🎤 Ses kaydı {message.duration ? `(${Math.floor(message.duration / 60)}:${String(message.duration % 60).padStart(2, '0')})` : ''}</Text>
         {message.content && <Text style={styles.bubbleText}>{message.content}</Text>}
         <Text style={[styles.msgTime, isMe && styles.msgTimeMe]}>{time}</Text>
       </View>
@@ -319,7 +322,7 @@ function DepotTab({ cardId, card }: { cardId: string; card: Card }) {
       {/* Customer Section */}
       {customer && (
         <View style={styles.depotSection}>
-          <Text style={styles.depotSectionTitle}>MUSTERI</Text>
+          <Text style={styles.depotSectionTitle}>MÜŞTERİ</Text>
           <TouchableOpacity
             style={styles.customerCard}
             onPress={() => router.push(`/customer/${customer.id}`)}
@@ -354,18 +357,18 @@ function DepotTab({ cardId, card }: { cardId: string; card: Card }) {
             ))}
           </ScrollView>
         ) : (
-          <Text style={styles.depotEmpty}>Henuz medya yok</Text>
+          <Text style={styles.depotEmpty}>Henüz medya yok</Text>
         )}
       </View>
 
       {/* Actions Section */}
       <View style={styles.depotSection}>
-        <Text style={styles.depotSectionTitle}>AKSIYONLAR</Text>
-        <ActionButton icon="📋" label="Teklif Olustur" onPress={() => Alert.alert('Bilgi', 'Web uzerinden teklif olusturabilirsiniz. voxi.com.tr')} />
-        <ActionButton icon="📅" label="Hatirlatma Kur" onPress={() => {
-          addItem({ type: 'reminder', title: 'Hatirlatma', metadata: { date: new Date().toISOString() } });
+        <Text style={styles.depotSectionTitle}>AKSİYONLAR</Text>
+        <ActionButton icon="📋" label="Teklif Oluştur" onPress={() => Alert.alert('Bilgi', 'Web üzerinden teklif oluşturabilirsiniz. voxi.com.tr')} />
+        <ActionButton icon="📅" label="Hatırlatma Kur" onPress={() => {
+          addItem({ type: 'reminder', title: 'Hatırlatma', metadata: { date: new Date().toISOString() } });
         }} />
-        <ActionButton icon="📧" label="E-posta Gonder" onPress={() => {
+        <ActionButton icon="📧" label="E-posta Gönder" onPress={() => {
           const email = customer?.email;
           if (email) {
             Linking.openURL(`mailto:${email}`);
@@ -373,7 +376,7 @@ function DepotTab({ cardId, card }: { cardId: string; card: Card }) {
             Alert.alert('Bilgi', 'Müşteri e-posta adresi bulunamadı');
           }
         }} />
-        <ActionButton icon="💬" label="WhatsApp Gonder" onPress={() => {
+        <ActionButton icon="💬" label="WhatsApp Gönder" onPress={() => {
           const phone = customer?.phone?.replace(/\s/g, '');
           if (phone) {
             Linking.openURL(`whatsapp://send?phone=${phone}`);
@@ -381,7 +384,7 @@ function DepotTab({ cardId, card }: { cardId: string; card: Card }) {
             Alert.alert('Bilgi', 'Müşteri telefon numarası bulunamadı');
           }
         }} />
-        <ActionButton icon="📱" label="SMS Gonder" onPress={() => {
+        <ActionButton icon="📱" label="SMS Gönder" onPress={() => {
           const phone = customer?.phone;
           if (phone) {
             Linking.openURL(`sms:${phone}`);
@@ -393,7 +396,7 @@ function DepotTab({ cardId, card }: { cardId: string; card: Card }) {
 
       {/* History Section */}
       <View style={styles.depotSection}>
-        <Text style={styles.depotSectionTitle}>GECMIS</Text>
+        <Text style={styles.depotSectionTitle}>GEÇMİŞ</Text>
         {items.slice(0, 10).map(item => (
           <View key={item.id} style={styles.historyItem}>
             <Text style={styles.historyTime}>
@@ -404,19 +407,23 @@ function DepotTab({ cardId, card }: { cardId: string; card: Card }) {
             <Text style={styles.historyText}>{item.title || item.type}</Text>
           </View>
         ))}
-        {items.length === 0 && <Text style={styles.depotEmpty}>Henuz gecmis yok</Text>}
+        {items.length === 0 && <Text style={styles.depotEmpty}>Henüz geçmiş yok</Text>}
       </View>
 
       {/* Card Info */}
       <View style={styles.depotSection}>
-        <Text style={styles.depotSectionTitle}>KART BILGISI</Text>
+        <Text style={styles.depotSectionTitle}>KART BİLGİSİ</Text>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Durum</Text>
-          <Text style={styles.infoValue}>{card.status}</Text>
+          <Text style={styles.infoValue}>
+            {KART_DURUMU_ETIKET[card.status as KartDurumu] || card.status}
+          </Text>
         </View>
         <View style={styles.infoRow}>
-          <Text style={styles.infoLabel}>Oncelik</Text>
-          <Text style={styles.infoValue}>{card.priority}</Text>
+          <Text style={styles.infoLabel}>Öncelik</Text>
+          <Text style={styles.infoValue}>
+            {ONCELIK_ETIKET[card.priority as Oncelik] || card.priority}
+          </Text>
         </View>
         {card.due_date && (
           <View style={styles.infoRow}>
@@ -428,7 +435,7 @@ function DepotTab({ cardId, card }: { cardId: string; card: Card }) {
         )}
         {card.ai_summary && (
           <View style={styles.summaryBox}>
-            <Text style={styles.summaryLabel}>AI Ozet</Text>
+            <Text style={styles.summaryLabel}>AI Özet</Text>
             <Text style={styles.summaryText}>{card.ai_summary}</Text>
           </View>
         )}

@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import MoodCheckin from '../../components/MoodCheckin';
 import EQCelebration from '../../components/EQCelebration';
 import { useAuth } from '../../contexts/AuthContext';
+import { ONCELIK_RENK, siralaKartlar, type Oncelik } from '../../lib/constants';
 
 function getInitials(name: string): string {
   return name
@@ -34,10 +35,8 @@ function getTimeAgo(date: string): string {
   return new Date(date).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' });
 }
 
-function getPriorityDot(priority: string) {
-  if (priority === 'urgent') return '#FF3B30';
-  if (priority === 'high') return '#8E8E93';
-  return null;
+function getPriorityDot(priority: string): string | null {
+  return ONCELIK_RENK[priority as Oncelik] ?? null;
 }
 
 function MiniAvatar({ name, size, style }: { name: string; size: number; style?: any }) {
@@ -127,37 +126,64 @@ const CardItem = memo(function CardItem({ card, onPress }: { card: Card; onPress
     .filter(Boolean)
     .join(', ');
 
+  const isUrgent = card.priority === 'urgent';
+  const isInProgress = card.status === 'in_progress';
+  const hasUnread = (card.unread_count || 0) > 0;
+
   return (
-    <TouchableOpacity style={styles.cardItem} onPress={onPress} activeOpacity={0.7} accessibilityLabel={`${card.title} kartını aç`}>
+    <TouchableOpacity
+      style={[styles.cardItem, isUrgent && styles.cardItemUrgent]}
+      onPress={onPress}
+      activeOpacity={0.7}
+      accessibilityLabel={`${card.title} kartını aç`}
+    >
       <AvatarCluster members={card.card_members} />
 
       <View style={styles.cardContent}>
         <View style={styles.cardTop}>
-          <Text style={styles.cardTitle} numberOfLines={1}>{card.title}</Text>
+          <View style={styles.cardTitleRow}>
+            {dotColor && <View style={[styles.priorityDot, { backgroundColor: dotColor }]} />}
+            <Text style={[styles.cardTitle, hasUnread && styles.cardTitleBold]} numberOfLines={1}>
+              {card.title}
+            </Text>
+          </View>
           <Text style={styles.cardTime}>{getTimeAgo(card.last_message_at)}</Text>
         </View>
 
         <View style={styles.cardBottom}>
-          <View style={styles.previewRow}>
-            {dotColor && <View style={[styles.priorityDot, { backgroundColor: dotColor }]} />}
-            <Text style={styles.cardPreview} numberOfLines={1}>
-              {card.last_message_preview || card.description || 'Yeni kart'}
-            </Text>
-          </View>
-          {card.unread_count > 0 && (
+          <Text style={styles.cardPreview} numberOfLines={1}>
+            {card.last_message_preview || card.description || 'Yeni kart'}
+          </Text>
+          {hasUnread && (
             <View style={styles.badge}>
               <Text style={styles.badgeText}>{card.unread_count}</Text>
             </View>
           )}
         </View>
 
-        {(customerName || memberNames) && (
-          <Text style={styles.metaTag} numberOfLines={1}>
-            {customerName ? customerName : ''}
-            {customerName && memberNames ? ' · ' : ''}
-            {memberNames}{memberCount > 3 ? ` +${memberCount - 3}` : ''}
-          </Text>
-        )}
+        <View style={styles.cardMeta}>
+          {isUrgent && (
+            <View style={styles.acilBadge}>
+              <Text style={styles.acilBadgeText}>⚡ Acil</Text>
+            </View>
+          )}
+          {isInProgress && !isUrgent && (
+            <View style={styles.devamBadge}>
+              <Text style={styles.devamBadgeText}>⏳ Devam Ediyor</Text>
+            </View>
+          )}
+          {customerName && (
+            <Text style={styles.metaTag} numberOfLines={1}>
+              {customerName}
+              {memberNames ? ` · ${memberNames}${memberCount > 3 ? ` +${memberCount - 3}` : ''}` : ''}
+            </Text>
+          )}
+          {!customerName && memberNames && (
+            <Text style={styles.metaTag} numberOfLines={1}>
+              {memberNames}{memberCount > 3 ? ` +${memberCount - 3}` : ''}
+            </Text>
+          )}
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -219,8 +245,9 @@ export default function HomeScreen() {
     }, [fetchCards])
   );
 
-  const openCards = cards.filter(c => c.status !== 'done');
-  const doneCards = cards.filter(c => c.status === 'done');
+  const { acikKartlar, tamamlananKartlar } = siralaKartlar(cards);
+  const openCards = acikKartlar;
+  const doneCards = tamamlananKartlar;
 
   const handleMoodClose = async () => {
     const today = new Date().toISOString().split('T')[0];
@@ -293,10 +320,11 @@ export default function HomeScreen() {
       />
 
       {doneCards.length > 0 && (
-        <TouchableOpacity style={styles.doneBar}>
+        <TouchableOpacity style={styles.doneBar} activeOpacity={0.7}>
           <Text style={styles.doneText}>
-            {doneCards.length} tamamlanan iş
+            ✓ {doneCards.length} tamamlanan iş
           </Text>
+          <Text style={styles.doneArrow}>›</Text>
         </TouchableOpacity>
       )}
     </View>
@@ -307,7 +335,10 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   cardItem: {
     flexDirection: 'row', paddingHorizontal: 20, paddingVertical: 14,
-    backgroundColor: colors.card, gap: 14, alignItems: 'center',
+    backgroundColor: colors.card, gap: 14, alignItems: 'flex-start',
+  },
+  cardItemUrgent: {
+    borderLeftWidth: 3, borderLeftColor: '#FF3B30',
   },
   clusterWrap: {
     width: 52, height: 52, position: 'relative',
@@ -317,21 +348,33 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   avatarSingleText: { fontSize: 16, fontWeight: '700', color: colors.text },
-  cardContent: { flex: 1 },
+  cardContent: { flex: 1, paddingTop: 2 },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
-  cardTitle: { fontSize: 16, fontWeight: '600', color: colors.dark, flex: 1, marginRight: 8 },
-  cardTime: { fontSize: 12, color: colors.muted },
-  cardBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  previewRow: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 6 },
-  priorityDot: { width: 8, height: 8, borderRadius: 4 },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, marginRight: 8 },
+  cardTitle: { fontSize: 16, fontWeight: '500', color: colors.dark, flex: 1 },
+  cardTitleBold: { fontWeight: '700' },
+  cardTime: { fontSize: 12, color: colors.muted, flexShrink: 0 },
+  cardBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  priorityDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
   cardPreview: { fontSize: 14, color: colors.muted, flex: 1 },
   badge: {
     backgroundColor: colors.dark, borderRadius: 10,
     minWidth: 20, height: 20, paddingHorizontal: 6,
-    alignItems: 'center', justifyContent: 'center',
+    alignItems: 'center', justifyContent: 'center', marginLeft: 8,
   },
   badgeText: { fontSize: 11, fontWeight: '700', color: '#FFFFFF' },
-  metaTag: { fontSize: 12, color: colors.muted, marginTop: 4 },
+  cardMeta: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
+  acilBadge: {
+    backgroundColor: '#FFF0EE', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
+    borderWidth: 1, borderColor: '#FF3B30',
+  },
+  acilBadgeText: { fontSize: 11, fontWeight: '700', color: '#FF3B30' },
+  devamBadge: {
+    backgroundColor: '#F5F3EF', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  devamBadgeText: { fontSize: 11, fontWeight: '600', color: colors.text },
+  metaTag: { fontSize: 12, color: colors.muted },
   separator: { height: 1, backgroundColor: colors.border, marginLeft: 86 },
   empty: { alignItems: 'center', paddingTop: 80 },
   emptyContainer: { flex: 1 },
@@ -343,8 +386,10 @@ const styles = StyleSheet.create({
   doneBar: {
     paddingVertical: 12, paddingHorizontal: 20,
     borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.card,
+    flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6,
   },
   doneText: { fontSize: 14, color: colors.muted, textAlign: 'center' },
+  doneArrow: { fontSize: 16, color: colors.muted },
   moodBanner: { borderBottomWidth: 1, borderBottomColor: colors.border },
   quickActionsWrap: {
     paddingVertical: 12, backgroundColor: colors.card,

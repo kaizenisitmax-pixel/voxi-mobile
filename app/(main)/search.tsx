@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { colors } from '../../lib/colors';
+import { KART_DURUMU_ETIKET, MUSTERI_DURUMU_ETIKET, type KartDurumu, type MusteriDurumu } from '../../lib/constants';
 
 type SearchResult = {
   id: string;
@@ -63,11 +64,13 @@ export default function SearchScreen() {
       const items: SearchResult[] = [
         ...(cardsRes.data?.map(c => ({
           id: c.id, type: 'card' as const,
-          title: c.title, subtitle: c.status,
+          title: c.title,
+          subtitle: KART_DURUMU_ETIKET[c.status as KartDurumu] || c.status,
         })) || []),
         ...(customersRes.data?.map(c => ({
           id: c.id, type: 'customer' as const,
-          title: c.company_name, subtitle: c.contact_name || c.status,
+          title: c.company_name,
+          subtitle: c.contact_name || MUSTERI_DURUMU_ETIKET[c.status as MusteriDurumu] || c.status,
         })) || []),
       ];
 
