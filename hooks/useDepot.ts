@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { logFileUpload, logNoteAdded } from '../lib/activity';
 
 export type DepotItem = {
   id: string;
@@ -23,8 +24,9 @@ export type DepotItem = {
   updated_at: string;
 };
 
-export function useDepot(cardId: string) {
-  const { user } = useAuth();
+export function useDepot(cardId: string, actorName?: string) {
+  const { user, profile } = useAuth();
+  const actor = actorName || profile?.full_name || 'Ekip Üyesi';
   const [items, setItems] = useState<DepotItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +72,12 @@ export function useDepot(cardId: string) {
         setError(addError.message);
       } else {
         fetchItems();
+        // Aktivite log — sohbete bildirim
+        if (data.type === 'media' || data.type === 'document') {
+          logFileUpload(cardId, actor, data.file_name || 'dosya', data.file_type || 'application/octet-stream');
+        } else if (data.type === 'note' && data.content) {
+          logNoteAdded(cardId, actor, data.content);
+        }
       }
       return { error: addError };
     } catch (err: any) {

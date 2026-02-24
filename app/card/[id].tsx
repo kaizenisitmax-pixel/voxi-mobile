@@ -24,7 +24,7 @@ function getInitials(name: string): string {
 export default function CardDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { user, membership } = useAuth();
+  const { user, membership, profile } = useAuth();
   const [tab, setTab] = useState<Tab>('chat');
   const [card, setCard] = useState<Card | null>(null);
   const [cardLoading, setCardLoading] = useState(true);
@@ -178,7 +178,7 @@ export default function CardDetailScreen() {
       {tab === 'chat' ? (
         <ChatTab cardId={id!} userId={user?.id} members={members} />
       ) : (
-        <DepotTab cardId={id!} card={card} />
+        <DepotTab cardId={id!} card={card} actorName={profile?.full_name || user?.email || 'Ekip Üyesi'} onCardUpdated={fetchCard} />
       )}
 
       {/* Add Member Modal */}
@@ -235,7 +235,7 @@ function ChatTab({ cardId, userId, members }: { cardId: string; userId?: string;
         ListEmptyComponent={
           !loading ? (
             <View style={styles.chatEmpty}>
-              <Text style={styles.chatEmptyText}>Henuz mesaj yok. Konusmaya basla!</Text>
+              <Text style={styles.chatEmptyText}>Henüz mesaj yok. Konuşmaya başla!</Text>
             </View>
           ) : null
         }
@@ -268,9 +268,20 @@ function ChatTab({ cardId, userId, members }: { cardId: string; userId?: string;
 }
 
 function MessageBubble({ message, isMe }: { message: ChatMessage; isMe: boolean }) {
+  const isActivity = message.message_type === 'activity';
   const isSystem = message.message_type === 'system' || message.message_type === 'ai';
   const senderName = message.profiles?.full_name || 'VOXI';
   const time = new Date(message.created_at).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+
+  // ─── Aktivite mesajı (merkezi hap görünümü) ───
+  if (isActivity) {
+    return (
+      <View style={styles.activityMsg}>
+        <Text style={styles.activityText}>{message.content}</Text>
+        <Text style={styles.activityTime}>{time}</Text>
+      </View>
+    );
+  }
 
   if (isSystem) {
     return (
@@ -312,7 +323,9 @@ function MessageBubble({ message, isMe }: { message: ChatMessage; isMe: boolean 
 }
 
 // ─────── DEPOT TAB ───────
-function DepotTab({ cardId, card }: { cardId: string; card: Card }) {
+function DepotTab({ cardId, card, actorName, onCardUpdated }: {
+  cardId: string; card: Card; actorName: string; onCardUpdated?: () => void;
+}) {
   const { items, mediaItems, loading, addItem } = useDepot(cardId);
   const router = useRouter();
   const [activeAction, setActiveAction] = useState<ActionType | null>(null);
@@ -367,31 +380,35 @@ function DepotTab({ cardId, card }: { cardId: string; card: Card }) {
       <View style={styles.depotSection}>
         <Text style={styles.depotSectionTitle}>AKSİYONLAR</Text>
         <View style={styles.actionGrid}>
-          <ActionButton
-            icon="📋" label="Teklif Oluştur"
-            sub="AI ile hazırla"
-            onPress={() => setActiveAction('proposal')}
-          />
-          <ActionButton
-            icon="⏰" label="Hatırlatma Kur"
+          {/* Saha aksiyonları */}
+          <ActionButton icon="✅" label="İş Tamamlandı"
+            sub="Ekibe bildir, kapat"
+            onPress={() => setActiveAction('job_done')} />
+          <ActionButton icon="💰" label="Ödeme Alındı"
+            sub="Tutarı kaydet"
+            onPress={() => setActiveAction('payment')} />
+          <ActionButton icon="🚨" label="Sorun Bildir"
+            sub="Acile yükselt, uyar"
+            onPress={() => setActiveAction('issue')} />
+          <ActionButton icon="📅" label="Randevu Ayarla"
+            sub={customer ? customer.company_name : 'Zaman seç'}
+            onPress={() => setActiveAction('appointment')} />
+          <ActionButton icon="📍" label="Yerindeyim"
+            sub="Sahaya giriş yap"
+            onPress={() => setActiveAction('checkin')} />
+          {/* İletişim aksiyonları */}
+          <ActionButton icon="⏰" label="Hatırlatma Kur"
             sub="Bildirim planla"
-            onPress={() => setActiveAction('reminder')}
-          />
-          <ActionButton
-            icon="📧" label="E-posta"
+            onPress={() => setActiveAction('reminder')} />
+          <ActionButton icon="💬" label="WhatsApp"
+            sub={customer?.phone || 'Numara ekle'}
+            onPress={() => setActiveAction('whatsapp')} />
+          <ActionButton icon="📧" label="E-posta"
             sub={customer?.email || 'Adres ekle'}
-            onPress={() => setActiveAction('email')}
-          />
-          <ActionButton
-            icon="💬" label="WhatsApp"
+            onPress={() => setActiveAction('email')} />
+          <ActionButton icon="📱" label="SMS"
             sub={customer?.phone || 'Numara ekle'}
-            onPress={() => setActiveAction('whatsapp')}
-          />
-          <ActionButton
-            icon="📱" label="SMS"
-            sub={customer?.phone || 'Numara ekle'}
-            onPress={() => setActiveAction('sms')}
-          />
+            onPress={() => setActiveAction('sms')} />
         </View>
       </View>
 
@@ -401,8 +418,9 @@ function DepotTab({ cardId, card }: { cardId: string; card: Card }) {
           visible={!!activeAction}
           actionType={activeAction}
           card={card}
+          actorName={actorName}
           onClose={() => setActiveAction(null)}
-          onSaved={() => addItem({ type: 'reminder', title: 'Hatırlatma kuruldu', metadata: {} })}
+          onCardUpdated={onCardUpdated}
         />
       )}
 
@@ -524,6 +542,14 @@ const styles = StyleSheet.create({
   voiceLabel: { fontSize: 14, color: colors.muted, marginBottom: 4 },
   msgTime: { fontSize: 11, color: colors.muted, marginTop: 4 },
   msgTimeMe: { textAlign: 'right' },
+  activityMsg: {
+    alignSelf: 'center', backgroundColor: colors.bg,
+    borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6,
+    marginVertical: 6, borderWidth: 1, borderColor: colors.border,
+    flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '85%',
+  },
+  activityText: { fontSize: 13, color: colors.text, textAlign: 'center', lineHeight: 18, flex: 1 },
+  activityTime: { fontSize: 11, color: colors.muted, flexShrink: 0 },
   systemMsg: { alignSelf: 'flex-start', paddingHorizontal: 14, paddingVertical: 10, marginBottom: 4 },
   systemSender: { fontSize: 12, fontWeight: '700', color: colors.dark, marginBottom: 2 },
   systemText: { fontSize: 14, color: colors.text, lineHeight: 20 },
