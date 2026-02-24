@@ -1,4 +1,4 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, ScrollView } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, ScrollView, Modal } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useState, useCallback, memo, useEffect, useMemo } from 'react';
 import { useCards, Card, CardMember } from '../../hooks/useCards';
@@ -25,12 +25,14 @@ const FILTERS: { key: FilterKey; label: string; emoji: string }[] = [
 
 // ─── Filtre Chip'leri ─────────────────────────────────────────────
 const FilterChips = memo(function FilterChips({
-  activeFilter, onSelect, cards, currentUserId,
+  activeFilter, onSelect, cards, currentUserId, industry, onTemplatePress,
 }: {
   activeFilter: FilterKey;
   onSelect: (f: FilterKey) => void;
   cards: Card[];
   currentUserId?: string | null;
+  industry: Industry | null;
+  onTemplatePress: () => void;
 }) {
   const counts: Record<FilterKey, number> = {
     all:    cards.filter(c => c.status !== 'done' && c.status !== 'cancelled').length,
@@ -42,53 +44,67 @@ const FilterChips = memo(function FilterChips({
   };
 
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={chipStyles.row}
-      style={chipStyles.wrap}
-    >
-      {FILTERS.map(f => {
-        const isActive = activeFilter === f.key;
-        const count    = counts[f.key];
-        return (
+    <View style={chipStyles.wrap}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={chipStyles.row}
+      >
+        {FILTERS.map(f => {
+          const isActive = activeFilter === f.key;
+          const count    = counts[f.key];
+          return (
+            <TouchableOpacity
+              key={f.key}
+              onPress={() => onSelect(f.key)}
+              style={[chipStyles.chip, isActive && chipStyles.chipActive]}
+              activeOpacity={0.7}
+            >
+              <Text style={chipStyles.chipEmoji}>{f.emoji}</Text>
+              <Text style={[chipStyles.chipLabel, isActive && chipStyles.chipLabelActive]}>
+                {f.label}
+              </Text>
+              {count > 0 && (
+                <View style={[chipStyles.badge, isActive && chipStyles.badgeActive, f.key === 'urgent' && chipStyles.badgeUrgent]}>
+                  <Text style={[chipStyles.badgeText, isActive && chipStyles.badgeTextActive]}>
+                    {count}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          );
+        })}
+
+        {/* Şablonlar — sadece sektör seçiliyse göster */}
+        {industry && industry.quickActions.length > 0 && (
           <TouchableOpacity
-            key={f.key}
-            onPress={() => onSelect(f.key)}
-            style={[chipStyles.chip, isActive && chipStyles.chipActive]}
+            style={chipStyles.templateBtn}
+            onPress={onTemplatePress}
             activeOpacity={0.7}
           >
-            <Text style={chipStyles.chipEmoji}>{f.emoji}</Text>
-            <Text style={[chipStyles.chipLabel, isActive && chipStyles.chipLabelActive]}>
-              {f.label}
-            </Text>
-            {count > 0 && (
-              <View style={[chipStyles.badge, isActive && chipStyles.badgeActive, f.key === 'urgent' && chipStyles.badgeUrgent]}>
-                <Text style={[chipStyles.badgeText, isActive && chipStyles.badgeTextActive]}>
-                  {count}
-                </Text>
-              </View>
-            )}
+            <Text style={chipStyles.templateBtnText}>⚡ Şablonlar</Text>
           </TouchableOpacity>
-        );
-      })}
-    </ScrollView>
+        )}
+      </ScrollView>
+    </View>
   );
 });
 
 const chipStyles = StyleSheet.create({
-  wrap:           { backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border },
-  row:            { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8, gap: 6 },
-  chip:           { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.border },
-  chipActive:     { backgroundColor: colors.dark, borderColor: colors.dark },
-  chipEmoji:      { fontSize: 14 },
-  chipLabel:      { fontSize: 13, fontWeight: '600', color: colors.text },
-  chipLabelActive:{ color: '#fff' },
-  badge:          { minWidth: 18, height: 18, borderRadius: 9, backgroundColor: colors.border, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
-  badgeActive:    { backgroundColor: 'rgba(255,255,255,0.25)' },
-  badgeUrgent:    { backgroundColor: '#FFEEEE' },
-  badgeText:      { fontSize: 10, fontWeight: '800', color: colors.text },
-  badgeTextActive:{ color: '#fff' },
+  wrap:            { backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border },
+  row:             { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8, gap: 6, alignItems: 'center' },
+  chip:            { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.border },
+  chipActive:      { backgroundColor: colors.dark, borderColor: colors.dark },
+  chipEmoji:       { fontSize: 14 },
+  chipLabel:       { fontSize: 13, fontWeight: '600', color: colors.text },
+  chipLabelActive: { color: '#fff' },
+  badge:           { minWidth: 18, height: 18, borderRadius: 9, backgroundColor: colors.border, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  badgeActive:     { backgroundColor: 'rgba(255,255,255,0.25)' },
+  badgeUrgent:     { backgroundColor: '#FFEEEE' },
+  badgeText:       { fontSize: 10, fontWeight: '800', color: colors.text },
+  badgeTextActive: { color: '#fff' },
+  templateBtn:     { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.border, marginLeft: 4 },
+  templateBtnText: { fontSize: 13, fontWeight: '600', color: colors.text },
 });
 
 function getInitials(name: string): string {
@@ -228,30 +244,47 @@ const CardItem = memo(function CardItem({ card, onPress }: { card: Card; onPress
   );
 });
 
-function QuickActions({ industry }: { industry: Industry | null }) {
+// QuickActionsModal — sektör aksiyonları hamburger butona taşındı
+function QuickActionsModal({ industry, visible, onClose }: { industry: Industry | null; visible: boolean; onClose: () => void }) {
   const router = useRouter();
-  if (!industry || industry.quickActions.length === 0) return null;
-
+  if (!industry) return null;
   return (
-    <View style={styles.quickActionsWrap}>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickActionsScroll}>
-        <View style={styles.quickBadge}>
-          <Text style={styles.quickBadgeText}>⚡ {industry.name}</Text>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableOpacity style={qaStyles.overlay} activeOpacity={1} onPress={onClose}>
+        <View style={qaStyles.sheet}>
+          <View style={qaStyles.handle} />
+          <View style={qaStyles.header}>
+            <Text style={qaStyles.title}>⚡ {industry.name} Şablonları</Text>
+            <TouchableOpacity onPress={onClose}>
+              <Text style={qaStyles.close}>Kapat</Text>
+            </TouchableOpacity>
+          </View>
+          {industry.quickActions.map((action, i) => (
+            <TouchableOpacity
+              key={i}
+              style={qaStyles.item}
+              onPress={() => { onClose(); router.push('/new'); }}
+              activeOpacity={0.7}
+            >
+              <Text style={qaStyles.itemText}>{action}</Text>
+            </TouchableOpacity>
+          ))}
         </View>
-        {industry.quickActions.map((action, i) => (
-          <TouchableOpacity
-            key={i}
-            style={styles.quickChip}
-            onPress={() => router.push('/new')}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.quickChipText}>{action}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-    </View>
+      </TouchableOpacity>
+    </Modal>
   );
 }
+
+const qaStyles = StyleSheet.create({
+  overlay:  { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.3)' },
+  sheet:    { backgroundColor: colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 40 },
+  handle:   { width: 36, height: 4, backgroundColor: colors.border, borderRadius: 2, alignSelf: 'center', marginTop: 10, marginBottom: 4 },
+  header:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.border },
+  title:    { fontSize: 16, fontWeight: '700', color: colors.dark },
+  close:    { fontSize: 15, fontWeight: '600', color: colors.muted },
+  item:     { paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: colors.border },
+  itemText: { fontSize: 15, color: colors.dark },
+});
 
 type Celebration = { type: 'work_anniversary' | 'milestone' | 'birthday'; name: string; message: string; emoji: string };
 
@@ -264,6 +297,7 @@ export default function HomeScreen() {
   const [celebrations, setCelebrations] = useState<Celebration[]>([]);
   const [showCelebrations, setShowCelebrations] = useState(false);
   const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
+  const [showTemplates, setShowTemplates] = useState(false);
 
   // Check if mood check-in was done today
   useEffect(() => {
@@ -339,6 +373,13 @@ export default function HomeScreen() {
         />
       )}
 
+      {/* Sektör şablonları — hamburger butona taşındı */}
+      <QuickActionsModal
+        industry={industry}
+        visible={showTemplates}
+        onClose={() => setShowTemplates(false)}
+      />
+
       <FlatList
         data={openCards}
         keyExtractor={item => item.id}
@@ -354,15 +395,14 @@ export default function HomeScreen() {
         removeClippedSubviews
         maxToRenderPerBatch={10}
         ListHeaderComponent={
-          <>
-            <FilterChips
-              activeFilter={activeFilter}
-              onSelect={setActiveFilter}
-              cards={cards}
-              currentUserId={user?.id}
-            />
-            <QuickActions industry={industry} />
-          </>
+          <FilterChips
+            activeFilter={activeFilter}
+            onSelect={setActiveFilter}
+            cards={cards}
+            currentUserId={user?.id}
+            industry={industry}
+            onTemplatePress={() => setShowTemplates(true)}
+          />
         }
         ListEmptyComponent={
           !loading ? (
@@ -481,21 +521,6 @@ const styles = StyleSheet.create({
   doneText: { fontSize: 14, color: colors.muted, textAlign: 'center' },
   doneArrow: { fontSize: 16, color: colors.muted },
   moodBanner: { borderBottomWidth: 1, borderBottomColor: colors.border },
-  quickActionsWrap: {
-    paddingVertical: 12, backgroundColor: colors.card,
-    borderBottomWidth: 1, borderBottomColor: colors.border,
-  },
-  quickActionsScroll: { paddingHorizontal: 16, gap: 8 },
-  quickBadge: {
-    backgroundColor: colors.dark, paddingHorizontal: 12, paddingVertical: 8,
-    borderRadius: 20,
-  },
-  quickBadgeText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
-  quickChip: {
-    backgroundColor: colors.bg, paddingHorizontal: 14, paddingVertical: 8,
-    borderRadius: 20, borderWidth: 1, borderColor: colors.border,
-  },
-  quickChipText: { fontSize: 13, fontWeight: '500', color: colors.dark },
   errorBanner: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     backgroundColor: '#FFF3CD', paddingHorizontal: 16, paddingVertical: 12,
