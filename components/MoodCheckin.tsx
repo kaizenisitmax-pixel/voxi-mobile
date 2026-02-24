@@ -21,14 +21,12 @@ export default function MoodCheckin({ workspaceId, onClose, compact = false }: P
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
 
-  const handleSelect = async (level: MoodLevel) => {
+  const handleSelect = (level: MoodLevel) => {
     setSelected(level);
-    const response = getMoodResponse(level);
-    setVoxiResponse(response);
+    setVoxiResponse(getMoodResponse(level));
   };
 
-  const handleSubmit = async () => {
-    if (!selected) return;
+  const submitLevel = async (level: MoodLevel) => {
     setSubmitting(true);
     try {
       const session = (await supabase.auth.getSession()).data.session;
@@ -40,18 +38,26 @@ export default function MoodCheckin({ workspaceId, onClose, compact = false }: P
           'Content-Type': 'application/json',
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify({ workspaceId, level: selected }),
+        body: JSON.stringify({ workspaceId, level }),
       });
       setDone(true);
-      setTimeout(() => onClose?.(), 2000);
+      setTimeout(() => onClose?.(), 1500);
     } catch {
       // fail silently — EQ optional
+      onClose?.();
     } finally {
       setSubmitting(false);
     }
   };
 
+  const handleSubmit = () => {
+    if (!selected) return;
+    submitLevel(selected);
+  };
+
   if (compact) {
+    if (done) return null;
+
     return (
       <View style={styles.compact}>
         <Text style={styles.compactTitle}>Bugün nasılsın?</Text>
@@ -60,12 +66,22 @@ export default function MoodCheckin({ workspaceId, onClose, compact = false }: P
             <TouchableOpacity
               key={opt.level}
               style={[styles.emojiBtn, selected === opt.level && styles.emojiBtnSelected]}
-              onPress={() => { handleSelect(opt.level); handleSubmit(); }}
+              onPress={() => {
+                if (submitting || selected !== null) return;
+                setSelected(opt.level);
+                submitLevel(opt.level);
+              }}
+              disabled={submitting}
             >
               <Text style={styles.emojiText}>{opt.emoji}</Text>
             </TouchableOpacity>
           ))}
         </View>
+        {selected && (
+          <Text style={styles.compactDone}>
+            {MOOD_OPTIONS.find(m => m.level === selected)?.emoji} Kaydedildi
+          </Text>
+        )}
       </View>
     );
   }
@@ -167,6 +183,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border, gap: 12,
   },
   compactTitle: { fontSize: 13, fontWeight: '600', color: colors.dark },
+  compactDone: { fontSize: 12, color: colors.muted, marginLeft: 4 },
   emojiBtn: { padding: 6, borderRadius: 8 },
   emojiBtnSelected: { backgroundColor: colors.dark },
   emojiText: { fontSize: 22 },
