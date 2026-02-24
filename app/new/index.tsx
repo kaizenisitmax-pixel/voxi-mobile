@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, TextInput, Alert,
   ActivityIndicator, ScrollView, Animated, Vibration, KeyboardAvoidingView,
-  Platform,
+  Platform, Keyboard,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -114,44 +114,23 @@ export default function NewEntryScreen() {
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
-  const speak = async (text: string) => {
-    try {
-      const session = await supabase.auth.getSession();
-      const accessToken = session.data.session?.access_token;
-      if (!accessToken) throw new Error('No session');
-
-      const res = await fetch(`${WEB_API}/api/tts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
-        body: JSON.stringify({ text }),
-      });
-
-      if (!res.ok) throw new Error('TTS API failed');
-
-      const { audioBase64 } = await res.json();
-      const tempUri = FileSystem.documentDirectory + 'voxi_tts.mp3';
-      await FileSystem.writeAsStringAsync(tempUri, audioBase64, { encoding: FileSystem.EncodingType.Base64 });
-
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
-      const { sound } = await Audio.Sound.createAsync({ uri: tempUri });
-      await sound.playAsync();
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
-          sound.unloadAsync();
-        }
-      });
-    } catch {
-      // Fallback to device TTS
+  // Cihazın kendi TTS motoru — ağ gerekmez, her zaman çalışır
+  const speak = (text: string): Promise<void> => {
+    return new Promise(resolve => {
       try {
-        const voices = await Speech.getAvailableVoicesAsync();
-        const turkishVoice = voices.find(v =>
-          v.language === 'tr-TR' && v.quality === Speech.VoiceQuality.Enhanced
-        ) || voices.find(v => v.language === 'tr-TR');
-        Speech.speak(text, { language: 'tr-TR', rate: 1.0, pitch: 0.9, voice: turkishVoice?.identifier });
+        Speech.stop();
+        Speech.speak(text, {
+          language: 'tr-TR',
+          rate: 1.05,
+          pitch: 0.85,
+          onDone: resolve,
+          onError: resolve,   // Hata olsa da devam et
+          onStopped: resolve,
+        });
       } catch {
-        Speech.speak(text, { language: 'tr-TR', rate: 1.0, pitch: 0.9 });
+        resolve();
       }
-    }
+    });
   };
 
   // ═══════════════════════════
@@ -460,12 +439,21 @@ export default function NewEntryScreen() {
         setCreatedCardTitle(aiResult.title);
         setMode('done');
         Vibration.vibrate(100);
-        speak(aiResult.voiceResponse || `${aiResult.title} kartı oluşturuldu`);
 
-        setTimeout(() => {
+        // Konuşma bitince geri dön (max 4 saniye)
+        const msg = aiResult.voiceResponse || `${aiResult.title} kartı oluşturuldu`;
+        const navTimeout = setTimeout(() => {
           if (router.canGoBack()) router.back();
           else router.replace('/');
-        }, 2500);
+        }, 4000);
+
+        speak(msg).then(() => {
+          clearTimeout(navTimeout);
+          setTimeout(() => {
+            if (router.canGoBack()) router.back();
+            else router.replace('/');
+          }, 600);
+        });
       } else {
         throw new Error('Kart oluşturulamadı');
       }
@@ -568,69 +556,78 @@ export default function NewEntryScreen() {
   // ─── PURPOSE ASK ───
   if (mode === 'purpose_ask') {
     const meta = SOURCE_META[sourceType];
+    const hasPurpose = purpose.trim().length > 0;
     return (
       <SafeAreaView style={styles.container}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <View style={styles.purposeContainer}>
-            {/* Header */}
-            <View style={styles.purposeHeader}>
-              <TouchableOpacity onPress={() => setMode('confirm')}>
-                <Text style={styles.purposeSkip}>Atla →</Text>
-              </TouchableOpacity>
+        {/* Header — klavye etkisinde kalmaz */}
+        <View style={styles.purposeHeader}>
+          <View style={{ width: 60 }} />
+          <Text style={styles.purposeHeaderTitle}>Bu ne için?</Text>
+          <TouchableOpacity onPress={() => { Keyboard.dismiss(); setMode('confirm'); }} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            <Text style={styles.purposeSkip}>Atla</Text>
+          </TouchableOpacity>
+        </View>
+
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}
+        >
+          {/* Kaydırılabilir içerik */}
+          <ScrollView
+            contentContainerStyle={styles.purposeScroll}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Icon */}
+            <View style={styles.purposeIconWrap}>
+              <Text style={styles.purposeIcon}>{meta.icon}</Text>
             </View>
+            <Text style={styles.purposeSubtitle}>
+              VOXI içeriği analiz etti. Bu kaydı ne amaçla{'\n'}eklediğini söylersen daha iyi kart oluşturayım.
+            </Text>
 
-            {/* Icon + transcript preview */}
-            <View style={styles.purposeTop}>
-              <View style={styles.purposeIconWrap}>
-                <Text style={styles.purposeIcon}>{meta.icon}</Text>
-              </View>
-              <Text style={styles.purposeTitle}>Bu ne için?</Text>
-              <Text style={styles.purposeSubtitle}>
-                VOXI içeriği analiz etti. Doğru kart oluşturabilmem için{'\n'}bu kaydın amacını söyler misin?
-              </Text>
-
-              {/* Transcript preview */}
-              {transcript ? (
-                <View style={styles.purposeTranscriptBox}>
-                  <Text style={styles.purposeTranscriptText} numberOfLines={3}>
-                    {sourceType === 'voice' ? `"${transcript}"` : transcript}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-
-            {/* Text input */}
-            <View style={styles.purposeInputWrap}>
-              <TextInput
-                style={styles.purposeInput}
-                value={purpose}
-                onChangeText={setPurpose}
-                placeholder="Örnek: ofise aldığımız koltuk takımının belgesi..."
-                placeholderTextColor={colors.muted}
-                multiline
-                autoFocus
-              />
-
-              {/* Voice record button for purpose */}
-              <TouchableOpacity
-                style={[styles.purposeMicBtn, isPurposeRecording && styles.purposeMicBtnActive]}
-                onPress={isPurposeRecording ? stopPurposeRecording : startPurposeRecording}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.purposeMicIcon}>{isPurposeRecording ? '⏹' : '🎤'}</Text>
-                <Text style={styles.purposeMicLabel}>
-                  {isPurposeRecording ? `${purposeRecordingSeconds}s • Bitir` : 'Sesle Söyle'}
+            {/* Transcript önizleme */}
+            {transcript ? (
+              <View style={styles.purposeTranscriptBox}>
+                <Text style={styles.purposeTranscriptText} numberOfLines={2}>
+                  {sourceType === 'voice' ? `"${transcript}"` : transcript}
                 </Text>
-              </TouchableOpacity>
-            </View>
+              </View>
+            ) : null}
 
-            {/* Submit */}
+            {/* Metin girişi */}
+            <TextInput
+              style={styles.purposeInput}
+              value={purpose}
+              onChangeText={setPurpose}
+              placeholder="Örnek: ofise aldığımız koltuk belgesi..."
+              placeholderTextColor={colors.muted}
+              multiline
+              returnKeyType="done"
+              blurOnSubmit
+            />
+          </ScrollView>
+
+          {/* Alt buton çubuğu — klavyenin hemen üstüne yapışır */}
+          <View style={styles.purposeFooter}>
             <TouchableOpacity
-              style={[styles.purposeSubmitBtn, !purpose.trim() && styles.purposeSubmitBtnDisabled]}
+              style={[styles.purposeMicBtn, isPurposeRecording && styles.purposeMicBtnActive]}
+              onPress={isPurposeRecording ? stopPurposeRecording : startPurposeRecording}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.purposeMicIcon}>{isPurposeRecording ? '⏹' : '🎤'}</Text>
+              {isPurposeRecording && (
+                <Text style={styles.purposeMicSecs}>{purposeRecordingSeconds}s</Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.purposeSubmitBtn, !hasPurpose && styles.purposeSubmitBtnDisabled]}
               onPress={() => {
+                Keyboard.dismiss();
                 const finalPurpose = purpose.trim();
                 if (finalPurpose) {
-                  // Re-run with purpose
                   processInput(sourceType, {}, finalPurpose);
                 } else {
                   setMode('confirm');
@@ -639,7 +636,7 @@ export default function NewEntryScreen() {
               activeOpacity={0.8}
             >
               <Text style={styles.purposeSubmitText}>
-                {purpose.trim() ? 'VOXI Yeniden Analiz Etsin' : 'Geç, Devam Et'}
+                {hasPurpose ? '✓ Kaydet ve Analiz Et' : 'Geç →'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -1125,42 +1122,50 @@ const styles = StyleSheet.create({
   textArea: { flex: 1, padding: 20, fontSize: 16, color: colors.dark, lineHeight: 24 },
 
   // ─── Purpose Ask ───
-  purposeContainer: { flex: 1, padding: 24 },
-  purposeHeader: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 8 },
-  purposeSkip: { fontSize: 15, fontWeight: '600', color: colors.muted },
-  purposeTop: { alignItems: 'center', paddingTop: 12, paddingBottom: 24 },
-  purposeIconWrap: {
-    width: 72, height: 72, borderRadius: 36, backgroundColor: colors.card,
-    borderWidth: 1, borderColor: colors.border,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 16,
+  purposeHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingVertical: 14,
+    backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border,
   },
-  purposeIcon: { fontSize: 32 },
-  purposeTitle: { fontSize: 22, fontWeight: '800', color: colors.dark, marginBottom: 8 },
-  purposeSubtitle: { fontSize: 14, color: colors.muted, textAlign: 'center', lineHeight: 20 },
-  purposeTranscriptBox: {
-    marginTop: 16, backgroundColor: colors.card,
-    borderRadius: 12, padding: 12, width: '100%',
+  purposeHeaderTitle: { fontSize: 16, fontWeight: '700', color: colors.dark },
+  purposeSkip: { fontSize: 15, fontWeight: '600', color: colors.muted },
+  purposeScroll: { padding: 24, alignItems: 'center' },
+  purposeIconWrap: {
+    width: 64, height: 64, borderRadius: 32, backgroundColor: colors.card,
     borderWidth: 1, borderColor: colors.border,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 14,
+  },
+  purposeIcon: { fontSize: 28 },
+  purposeSubtitle: { fontSize: 14, color: colors.muted, textAlign: 'center', lineHeight: 20, marginBottom: 16 },
+  purposeTranscriptBox: {
+    backgroundColor: colors.card, borderRadius: 12, padding: 12, width: '100%',
+    borderWidth: 1, borderColor: colors.border, marginBottom: 16,
   },
   purposeTranscriptText: { fontSize: 13, color: colors.text, lineHeight: 18, fontStyle: 'italic' },
-  purposeInputWrap: { gap: 12, marginBottom: 20 },
   purposeInput: {
-    backgroundColor: colors.card, borderRadius: 14, borderWidth: 1, borderColor: colors.border,
+    width: '100%', backgroundColor: colors.card, borderRadius: 14,
+    borderWidth: 1, borderColor: colors.border,
     paddingHorizontal: 16, paddingVertical: 14,
-    fontSize: 15, color: colors.dark, minHeight: 80, textAlignVertical: 'top',
+    fontSize: 15, color: colors.dark, minHeight: 90, textAlignVertical: 'top',
+  },
+  purposeFooter: {
+    flexDirection: 'row', gap: 10,
+    paddingHorizontal: 16, paddingVertical: 12,
+    paddingBottom: 20,
+    backgroundColor: colors.card, borderTopWidth: 1, borderTopColor: colors.border,
   },
   purposeMicBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: colors.card, borderRadius: 14, borderWidth: 1, borderColor: colors.border,
-    paddingVertical: 14,
+    width: 52, height: 52, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.border,
   },
   purposeMicBtnActive: { backgroundColor: colors.danger + '15', borderColor: colors.danger },
-  purposeMicIcon: { fontSize: 20 },
-  purposeMicLabel: { fontSize: 14, fontWeight: '600', color: colors.dark },
+  purposeMicIcon: { fontSize: 22 },
+  purposeMicSecs: { fontSize: 10, fontWeight: '700', color: colors.danger, marginTop: 2 },
   purposeSubmitBtn: {
-    backgroundColor: colors.dark, borderRadius: 16, paddingVertical: 18,
+    flex: 1, height: 52, backgroundColor: colors.dark, borderRadius: 14,
     alignItems: 'center', justifyContent: 'center',
   },
   purposeSubmitBtnDisabled: { backgroundColor: colors.disabled },
-  purposeSubmitText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+  purposeSubmitText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
 });
