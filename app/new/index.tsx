@@ -114,22 +114,32 @@ export default function NewEntryScreen() {
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
-  // Cihazın kendi TTS motoru — ağ gerekmez, her zaman çalışır
+  // TTS — kayıt sesini kapatıp sonra konuşur
   const speak = (text: string): Promise<void> => {
     return new Promise(resolve => {
-      try {
-        Speech.stop();
-        Speech.speak(text, {
-          language: 'tr-TR',
-          rate: 1.05,
-          pitch: 0.85,
-          onDone: resolve,
-          onError: resolve,   // Hata olsa da devam et
-          onStopped: resolve,
-        });
-      } catch {
-        resolve();
-      }
+      (async () => {
+        try {
+          // Kayıt modundan çık, oynatma moduna geç
+          await Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+          }).catch(() => {});
+          // Ses oturumunun geçiş için kısa bekleme
+          await new Promise(r => setTimeout(r, 200));
+          Speech.stop();
+          Speech.speak(text, {
+            language: 'tr-TR',
+            rate: 1.05,
+            pitch: 0.85,
+            onDone: resolve,
+            onError: resolve,
+            onStopped: resolve,
+          });
+        } catch {
+          resolve();
+        }
+      })();
     });
   };
 
@@ -248,45 +258,23 @@ export default function NewEntryScreen() {
     payload: { fileUri?: string; text?: string; fileType?: string; fileName?: string },
     userPurpose?: string,
   ) => {
-    // If re-running with purpose but no payload, use last saved payload
-    const effectivePayload = (userPurpose && !payload.fileUri && !payload.text && lastPayloadRef.current)
-      ? lastPayloadRef.current.payload
-      : payload;
-    const effectiveType = (userPurpose && !payload.fileUri && !payload.text && lastPayloadRef.current)
-      ? lastPayloadRef.current.type
-      : type;
-
-    // Save payload for potential purpose re-run
-    if (!userPurpose) {
-      lastPayloadRef.current = { type, payload };
-    }
-
     setMode('processing');
-    setSourceType(effectiveType);
+    setSourceType(type);
     setCurrentStep('transcribe');
     setTranscript('');
 
     try {
-      const result = await smartCreate(effectiveType, effectivePayload, membership!.workspace_id, industryId, userPurpose);
+      const result = await smartCreate(type, payload, membership!.workspace_id, industryId, userPurpose);
       console.log('[processInput] AI result:', JSON.stringify(result).slice(0, 400));
 
       setAiResult(result);
-      setTranscript(result.transcript || effectivePayload.text || effectivePayload.fileName || '');
+      setTranscript(result.transcript || payload.text || payload.fileName || '');
       setCurrentStep('analyze');
 
       await new Promise(r => setTimeout(r, 600));
       setCurrentStep('done');
-
       await new Promise(r => setTimeout(r, 400));
-
-      // After initial analysis (no purpose yet), ask user for purpose
-      // Skip purpose_ask if this is already a purpose-refined call or plain text
-      if (!userPurpose && type !== 'text') {
-        setPurpose('');
-        setMode('purpose_ask');
-      } else {
-        setMode('confirm');
-      }
+      setMode('confirm');
     } catch (err: any) {
       console.error('[processInput] Error:', err);
       setErrorMessage(err.message || 'Bir hata oluştu');
@@ -347,6 +335,17 @@ export default function NewEntryScreen() {
   //      PICKERS
   // ═══════════════════════════
 
+  // Foto/belge için: dosyayı kaydet, hemen "Bu ne için?" ekranını aç
+  const showPurposeFor = (
+    type: 'photo' | 'document',
+    payload: { fileUri: string; fileType: string; fileName: string },
+  ) => {
+    lastPayloadRef.current = { type, payload };
+    setSourceType(type);
+    setPurpose('');
+    setMode('purpose_ask');
+  };
+
   const takePhoto = async () => {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
@@ -354,15 +353,15 @@ export default function NewEntryScreen() {
       return;
     }
     const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
-    if (!result.canceled && result.assets[0] && membership?.workspace_id) {
-      processInput('photo', { fileUri: result.assets[0].uri, fileType: 'image/jpeg', fileName: 'photo.jpg' });
+    if (!result.canceled && result.assets[0]) {
+      showPurposeFor('photo', { fileUri: result.assets[0].uri, fileType: 'image/jpeg', fileName: 'photo.jpg' });
     }
   };
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8 });
-    if (!result.canceled && result.assets[0] && membership?.workspace_id) {
-      processInput('photo', { fileUri: result.assets[0].uri, fileType: 'image/jpeg', fileName: 'photo.jpg' });
+    if (!result.canceled && result.assets[0]) {
+      showPurposeFor('photo', { fileUri: result.assets[0].uri, fileType: 'image/jpeg', fileName: 'photo.jpg' });
     }
   };
 
@@ -372,14 +371,11 @@ export default function NewEntryScreen() {
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         'text/plain'],
     });
-    if (!result.canceled && result.assets[0] && membership?.workspace_id) {
+    if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
       const mime = asset.mimeType || 'application/octet-stream';
-      if (mime.startsWith('image/')) {
-        processInput('photo', { fileUri: asset.uri, fileType: mime, fileName: asset.name });
-      } else {
-        processInput('document', { fileUri: asset.uri, fileType: mime, fileName: asset.name });
-      }
+      const type = mime.startsWith('image/') ? 'photo' : 'document';
+      showPurposeFor(type, { fileUri: asset.uri, fileType: mime, fileName: asset.name });
     }
   };
 
@@ -556,14 +552,21 @@ export default function NewEntryScreen() {
   // ─── PURPOSE ASK ───
   if (mode === 'purpose_ask') {
     const meta = SOURCE_META[sourceType];
-    const hasPurpose = purpose.trim().length > 0;
+    const fileName = lastPayloadRef.current?.payload?.fileName;
+
+    const runWithPurpose = (finalPurpose?: string) => {
+      Keyboard.dismiss();
+      if (!lastPayloadRef.current) { setMode('choose'); return; }
+      processInput(lastPayloadRef.current.type, lastPayloadRef.current.payload, finalPurpose);
+    };
+
     return (
       <SafeAreaView style={styles.container}>
         {/* Header — klavye etkisinde kalmaz */}
         <View style={styles.purposeHeader}>
           <View style={{ width: 60 }} />
           <Text style={styles.purposeHeaderTitle}>Bu ne için?</Text>
-          <TouchableOpacity onPress={() => { Keyboard.dismiss(); setMode('confirm'); }} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+          <TouchableOpacity onPress={() => runWithPurpose(undefined)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
             <Text style={styles.purposeSkip}>Atla</Text>
           </TouchableOpacity>
         </View>
@@ -573,43 +576,39 @@ export default function NewEntryScreen() {
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           keyboardVerticalOffset={0}
         >
-          {/* Kaydırılabilir içerik */}
           <ScrollView
             contentContainerStyle={styles.purposeScroll}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            {/* Icon */}
+            {/* Dosya/kaynak önizleme */}
             <View style={styles.purposeIconWrap}>
               <Text style={styles.purposeIcon}>{meta.icon}</Text>
             </View>
-            <Text style={styles.purposeSubtitle}>
-              VOXI içeriği analiz etti. Bu kaydı ne amaçla{'\n'}eklediğini söylersen daha iyi kart oluşturayım.
-            </Text>
-
-            {/* Transcript önizleme */}
-            {transcript ? (
+            {fileName && (
               <View style={styles.purposeTranscriptBox}>
-                <Text style={styles.purposeTranscriptText} numberOfLines={2}>
-                  {sourceType === 'voice' ? `"${transcript}"` : transcript}
-                </Text>
+                <Text style={styles.purposeTranscriptText} numberOfLines={1}>{fileName}</Text>
               </View>
-            ) : null}
+            )}
+            <Text style={styles.purposeSubtitle}>
+              Bu içeriği ne amaçla ekliyorsunuz?{'\n'}Belirtirseniz daha doğru kart oluştururum.
+            </Text>
 
             {/* Metin girişi */}
             <TextInput
               style={styles.purposeInput}
               value={purpose}
               onChangeText={setPurpose}
-              placeholder="Örnek: ofise aldığımız koltuk belgesi..."
+              placeholder="Fatura, müşteri belgesi, kargo takibi..."
               placeholderTextColor={colors.muted}
               multiline
               returnKeyType="done"
               blurOnSubmit
+              autoFocus
             />
           </ScrollView>
 
-          {/* Alt buton çubuğu — klavyenin hemen üstüne yapışır */}
+          {/* Alt buton çubuğu — her zaman aktif */}
           <View style={styles.purposeFooter}>
             <TouchableOpacity
               style={[styles.purposeMicBtn, isPurposeRecording && styles.purposeMicBtnActive]}
@@ -623,26 +622,12 @@ export default function NewEntryScreen() {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.purposeSubmitBtn, !hasPurpose && styles.purposeSubmitBtnDisabled]}
-              onPress={() => {
-                Keyboard.dismiss();
-                const finalPurpose = purpose.trim();
-                if (finalPurpose) {
-                  // Dosyayı yeniden yüklemek yerine mevcut transcript + amaç = metin olarak gönder
-                  // Bu yöntem her zaman çalışır, dosya URI geçerliliğine bağımlı değil
-                  const combinedText = [
-                    transcript ? `İçerik: ${transcript}` : null,
-                    `Kullanıcı amacı: ${finalPurpose}`,
-                  ].filter(Boolean).join('\n\n');
-                  processInput('text', { text: combinedText }, finalPurpose);
-                } else {
-                  setMode('confirm');
-                }
-              }}
+              style={styles.purposeSubmitBtn}
+              onPress={() => runWithPurpose(purpose.trim() || undefined)}
               activeOpacity={0.8}
             >
               <Text style={styles.purposeSubmitText}>
-                {hasPurpose ? '✓ Kaydet ve Analiz Et' : 'Geç →'}
+                {purpose.trim() ? 'Analiz Et →' : 'Atla →'}
               </Text>
             </TouchableOpacity>
           </View>
