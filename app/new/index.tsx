@@ -78,6 +78,8 @@ export default function NewEntryScreen() {
   const [createdCardTitle, setCreatedCardTitle] = useState('');
   const [createdVoiceResponse, setCreatedVoiceResponse] = useState('');
   const [showTemplates, setShowTemplates] = useState(false);
+  // Seçili takip görevleri (insight index'leri)
+  const [selectedInsights, setSelectedInsights] = useState<Set<number>>(new Set());
   const [industryId, setIndustryId] = useState<number | null>(null);
   const [purpose, setPurpose] = useState('');
 
@@ -336,6 +338,7 @@ export default function NewEntryScreen() {
       console.log('[processInput] AI result:', JSON.stringify(result).slice(0, 400));
 
       setAiResult(result);
+      setSelectedInsights(new Set()); // Yeni analiz → seçimleri sıfırla
       setTranscript(result.transcript || payload.text || payload.fileName || '');
       setCurrentStep('analyze');
 
@@ -522,7 +525,24 @@ export default function NewEntryScreen() {
       });
 
       if (cardResult?.card) {
-        const msg = aiResult.voiceResponse || `${aiResult.title} kartı oluşturuldu`;
+        // Seçili insight'lardan takip görevleri oluştur
+        const insights = aiResult.insights || [];
+        const followUps = insights.filter((_, i) => selectedInsights.has(i));
+        for (const insight of followUps) {
+          await createCard({
+            title: insight.length > 75 ? insight.slice(0, 72) + '...' : insight,
+            description: `Takip görevi — ${aiResult.title} kartından oluşturuldu.\n\n${insight}`,
+            source_type: 'text',
+            customer_id: customerId,
+            priority: 'normal',
+            labels: ['takip'],
+          }).catch(() => {}); // Takip görevi başarısız olsa ana kart etkilenmesin
+        }
+
+        const followUpMsg = followUps.length > 0
+          ? ` ${followUps.length} takip görevi de eklendi.`
+          : '';
+        const msg = (aiResult.voiceResponse || `${aiResult.title} kartı oluşturuldu`) + followUpMsg;
         setCreatedCardTitle(aiResult.title);
         setCreatedVoiceResponse(msg);
         setMode('done');
@@ -870,20 +890,44 @@ export default function NewEntryScreen() {
               </View>
             )}
 
-            {/* AI Insights */}
+            {/* Takip Görevleri — seçilenler kart oluşturulunca ayrı görev olarak eklenir */}
             {insights.length > 0 && (
               <View style={styles.insightsSection}>
-                <Text style={styles.sectionTitle}>💡 VOXI Önerileri</Text>
-                {insights.map((insight, i) => (
-                  <View key={i} style={styles.insightRow}>
-                    <Text style={styles.insightDot}>•</Text>
-                    <Text style={styles.insightText}>{insight}</Text>
-                  </View>
-                ))}
+                <View style={styles.insightsHeader}>
+                  <Text style={styles.sectionTitle}>📌 Takip Görevi Ekle</Text>
+                  <Text style={styles.insightsHint}>
+                    {selectedInsights.size > 0
+                      ? `${selectedInsights.size} görev seçildi`
+                      : 'İşaretledikleriniz görev olarak oluşturulur'}
+                  </Text>
+                </View>
+                {insights.map((insight, i) => {
+                  const selected = selectedInsights.has(i);
+                  return (
+                    <TouchableOpacity
+                      key={i}
+                      style={[styles.insightRow, selected && styles.insightRowSelected]}
+                      onPress={() => {
+                        setSelectedInsights(prev => {
+                          const next = new Set(prev);
+                          if (next.has(i)) next.delete(i); else next.add(i);
+                          return next;
+                        });
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[styles.insightCheck, selected && styles.insightCheckSelected]}>
+                        {selected && <Text style={styles.insightCheckMark}>✓</Text>}
+                      </View>
+                      <Text style={[styles.insightText, selected && styles.insightTextSelected]}>
+                        {insight}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             )}
 
-            {/* Spacer for button */}
             <View style={{ height: 100 }} />
           </ScrollView>
         </KeyboardAvoidingView>
@@ -891,7 +935,11 @@ export default function NewEntryScreen() {
         {/* Fixed Create Button */}
         <View style={styles.confirmFooter}>
           <TouchableOpacity style={styles.createBtn} onPress={handleCreateCard} activeOpacity={0.8}>
-            <Text style={styles.createBtnText}>🚀 Kart Oluştur</Text>
+            <Text style={styles.createBtnText}>
+              {selectedInsights.size > 0
+                ? `🚀 Kart + ${selectedInsights.size} Görev Oluştur`
+                : '🚀 Kart Oluştur'}
+            </Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -1182,12 +1230,29 @@ const styles = StyleSheet.create({
   detailKey: { fontSize: 14, color: colors.muted, fontWeight: '500' },
   detailValue: { fontSize: 14, color: colors.dark, fontWeight: '600', flexShrink: 1, textAlign: 'right', maxWidth: '60%' },
   insightsSection: {
-    backgroundColor: '#F8F6F1', borderRadius: 14, padding: 16, marginBottom: 20,
-    borderWidth: 1, borderColor: '#EDE9E0',
+    backgroundColor: colors.card, borderRadius: 14, padding: 16, marginBottom: 20,
+    borderWidth: 1, borderColor: colors.border,
   },
-  insightRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
-  insightDot: { fontSize: 14, color: colors.dark, fontWeight: '700', lineHeight: 20 },
+  insightsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  insightsHint: { fontSize: 12, color: colors.muted },
+  insightRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+    paddingVertical: 10, paddingHorizontal: 10, marginBottom: 6,
+    borderRadius: 10, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.bg,
+  },
+  insightRowSelected: {
+    backgroundColor: colors.dark, borderColor: colors.dark,
+  },
+  insightCheck: {
+    width: 20, height: 20, borderRadius: 10,
+    borderWidth: 1.5, borderColor: colors.disabled,
+    alignItems: 'center', justifyContent: 'center', marginTop: 1, flexShrink: 0,
+  },
+  insightCheckSelected: { backgroundColor: '#FFF', borderColor: '#FFF' },
+  insightCheckMark: { fontSize: 11, fontWeight: '800', color: colors.dark },
   insightText: { fontSize: 14, color: colors.text, lineHeight: 20, flex: 1 },
+  insightTextSelected: { color: '#FFF' },
 
   // ─── Confirm Footer ───
   confirmFooter: {
