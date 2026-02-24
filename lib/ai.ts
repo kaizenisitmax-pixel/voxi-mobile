@@ -5,6 +5,7 @@ export const WEB_API = 'https://voxi-web-production.vercel.app';
 
 // ─── Types ────────────────────────────────────────────────────────
 export type SmartCreateResult = {
+  cardType: 'gorev' | 'not' | 'arsiv';
   title: string;
   description: string;
   customerName: string | null;

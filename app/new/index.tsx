@@ -427,13 +427,17 @@ export default function NewEntryScreen() {
         }
       }
 
+      const cardType = aiResult.cardType || 'gorev';
+      // cardType'ı labels'a ekle (arama için)
+      const labelsWithType = [cardType, ...aiResult.labels.filter(l => l !== cardType)];
+
       const cardResult = await createCard({
         title: aiResult.title,
         description: aiResult.description,
         source_type: sourceType,
-        customer_id: customerId,
+        customer_id: cardType === 'gorev' ? customerId : undefined,
         priority: aiResult.priority,
-        labels: aiResult.labels,
+        labels: labelsWithType,
         ai_summary: aiResult.description,
       });
 
@@ -705,6 +709,38 @@ export default function NewEntryScreen() {
             {/* Divider */}
             <View style={styles.divider} />
 
+            {/* Kart Türü */}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>KART TÜRÜ</Text>
+              <View style={styles.cardTypeRow}>
+                {([
+                  { key: 'gorev', label: 'Görev', icon: '📋' },
+                  { key: 'not', label: 'Not', icon: '📝' },
+                  { key: 'arsiv', label: 'Arşiv', icon: '🗂️' },
+                ] as const).map(opt => {
+                  const active = (aiResult.cardType || 'gorev') === opt.key;
+                  return (
+                    <TouchableOpacity
+                      key={opt.key}
+                      style={[styles.cardTypeBtn, active && styles.cardTypeBtnActive]}
+                      onPress={() => {
+                        const next = { ...aiResult, cardType: opt.key };
+                        // Not/arşiv ise müşteri bağlantısını temizle
+                        if (opt.key !== 'gorev') next.customerName = null;
+                        setAiResult(next);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.cardTypeIcon}>{opt.icon}</Text>
+                      <Text style={[styles.cardTypeLabel, active && styles.cardTypeLabelActive]}>
+                        {opt.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
             {/* Title */}
             <View style={styles.fieldGroup}>
               <Text style={styles.fieldLabel}>BAŞLIK</Text>
@@ -730,17 +766,19 @@ export default function NewEntryScreen() {
               />
             </View>
 
-            {/* Customer */}
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>MÜŞTERİ</Text>
-              <TextInput
-                style={styles.fieldInput}
-                value={aiResult.customerName || ''}
-                onChangeText={t => setAiResult({ ...aiResult, customerName: t || null })}
-                placeholder="Firma adı (opsiyonel)"
-                placeholderTextColor={colors.muted}
-              />
-            </View>
+            {/* Müşteri — sadece "gorev" tipinde göster */}
+            {(aiResult.cardType ?? 'gorev') === 'gorev' && (
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>MÜŞTERİ</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={aiResult.customerName || ''}
+                  onChangeText={t => setAiResult({ ...aiResult, customerName: t || null })}
+                  placeholder="Firma adı (opsiyonel)"
+                  placeholderTextColor={colors.muted}
+                />
+              </View>
+            )}
 
             {/* Priority */}
             <View style={styles.fieldGroup}>
@@ -1049,6 +1087,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, color: colors.dark,
   },
   fieldMulti: { minHeight: 100, textAlignVertical: 'top' },
+  cardTypeRow: { flexDirection: 'row', gap: 8 },
+  cardTypeBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 10, borderRadius: 10,
+    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
+  },
+  cardTypeBtnActive: { backgroundColor: colors.dark, borderColor: colors.dark },
+  cardTypeIcon: { fontSize: 16 },
+  cardTypeLabel: { fontSize: 13, fontWeight: '600', color: colors.text },
+  cardTypeLabelActive: { color: '#FFF' },
   priorityRow: { flexDirection: 'row', gap: 8 },
   priorityBtn: {
     flex: 1, paddingVertical: 10, borderRadius: 10, backgroundColor: colors.card,
