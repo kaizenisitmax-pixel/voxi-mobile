@@ -16,9 +16,47 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Audio } from 'expo-av';
-import { supabase } from '../../lib/supabase';
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '../../lib/supabase';
 import { colors } from '../../lib/colors';
 import { WEB_API } from '../../lib/ai';
+
+// ─── Storage Upload Helper ────────────────────────────────────────
+async function uploadFileAndGetSignedUrl(
+  fileUri: string,
+  fileType: string,
+  fileName: string,
+  accessToken: string,
+): Promise<string | null> {
+  try {
+    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const path = `entity-updates/${Date.now()}-${safeName}`;
+
+    const uploadResult = await FileSystem.uploadAsync(
+      `${SUPABASE_URL}/storage/v1/object/smart-create-uploads/${path}`,
+      fileUri,
+      {
+        httpMethod: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          apikey: SUPABASE_ANON_KEY,
+          'Content-Type': fileType,
+          'x-upsert': 'true',
+        },
+        uploadType: 0 as FileSystem.FileSystemUploadType,
+      },
+    );
+
+    if (uploadResult.status >= 400) return null;
+
+    const { data } = await supabase.storage
+      .from('smart-create-uploads')
+      .createSignedUrl(path, 600);
+
+    return data?.signedUrl ?? null;
+  } catch {
+    return null;
+  }
+}
 
 // ─── Tipler ───────────────────────────────────────────────────────
 type Customer = {
@@ -150,10 +188,24 @@ function AIUpdatePanel({ entityId, entityType, entityName, onApply }: {
       if (text) body.text = text;
 
       if (fileUri && (type === 'voice' || type === 'photo' || type === 'document')) {
-        const base64 = await FileSystem.readAsStringAsync(fileUri, { encoding: 'base64' as any });
-        body.fileBase64 = base64;
-        body.fileType   = fileType || 'image/jpeg';
+        const fileName = `file.${type === 'voice' ? 'm4a' : type === 'photo' ? 'jpg' : 'pdf'}`;
+        const resolvedType = fileType || (type === 'voice' ? 'audio/m4a' : type === 'photo' ? 'image/jpeg' : 'application/pdf');
+
+        // Storage upload ile büyük dosyaları verimli gönder
+        const signedUrl = await uploadFileAndGetSignedUrl(fileUri, resolvedType, fileName, session.access_token);
+        if (signedUrl) {
+          body.signedUrl = signedUrl;
+          body.fileType  = resolvedType;
+        } else {
+          // Fallback: base64
+          const base64 = await FileSystem.readAsStringAsync(fileUri, { encoding: 'base64' as any });
+          body.fileBase64 = base64;
+          body.fileType   = resolvedType;
+        }
       }
+
+      const controller = new AbortController();
+      const timeoutId  = setTimeout(() => controller.abort(), 55_000);
 
       const res = await fetch(`${WEB_API}/api/entity-update`, {
         method: 'POST',
@@ -162,7 +214,9 @@ function AIUpdatePanel({ entityId, entityType, entityName, onApply }: {
           'Authorization': `Bearer ${session.access_token}`,
         },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       const data = await res.json();
       if (data.error) throw new Error(data.error);
