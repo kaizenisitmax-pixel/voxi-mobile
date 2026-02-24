@@ -76,6 +76,7 @@ export default function NewEntryScreen() {
   const [text, setText] = useState('');
   const [creating, setCreating] = useState(false);
   const [createdCardTitle, setCreatedCardTitle] = useState('');
+  const [createdVoiceResponse, setCreatedVoiceResponse] = useState('');
   const [showTemplates, setShowTemplates] = useState(false);
   const [industryId, setIndustryId] = useState<number | null>(null);
   const [purpose, setPurpose] = useState('');
@@ -114,28 +115,43 @@ export default function NewEntryScreen() {
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
-  // TTS — kayıt sesini kapatıp sonra konuşur
+  // TTS — kayıt oturumunu kapat, sonra konuş; Türkçe ses yoksa cihaz sesiyle devam et
   const speak = (text: string): Promise<void> => {
     return new Promise(resolve => {
       (async () => {
         try {
-          // Kayıt modundan çık, oynatma moduna geç
+          // Kayıt modundan tam çıkış — iOS audio session geçişi için
           await Audio.setAudioModeAsync({
             allowsRecordingIOS: false,
             playsInSilentModeIOS: true,
             staysActiveInBackground: false,
           }).catch(() => {});
-          // Ses oturumunun geçiş için kısa bekleme
-          await new Promise(r => setTimeout(r, 200));
+
+          // iOS audio session geçişi için yeterli süre bekle
+          await new Promise(r => setTimeout(r, 600));
+
           Speech.stop();
-          Speech.speak(text, {
-            language: 'tr-TR',
-            rate: 1.05,
-            pitch: 0.85,
-            onDone: resolve,
-            onError: resolve,
-            onStopped: resolve,
-          });
+
+          // Önce Türkçe dene; Türkçe TTS kurulu değilse cihaz default sesiyle dene
+          const trySpeak = (lang?: string) => {
+            Speech.speak(text, {
+              language: lang,
+              rate: 1.0,
+              pitch: 0.85,
+              onDone: resolve,
+              onStopped: resolve,
+              onError: () => {
+                if (lang) {
+                  // Türkçe ses kurulu değil — dil belirtmeden tekrar dene
+                  trySpeak(undefined);
+                } else {
+                  resolve(); // Son fallback — sessiz geç
+                }
+              },
+            });
+          };
+
+          trySpeak('tr-TR');
         } catch {
           resolve();
         }
@@ -444,23 +460,24 @@ export default function NewEntryScreen() {
       });
 
       if (cardResult?.card) {
+        const msg = aiResult.voiceResponse || `${aiResult.title} kartı oluşturuldu`;
         setCreatedCardTitle(aiResult.title);
+        setCreatedVoiceResponse(msg);
         setMode('done');
         Vibration.vibrate(100);
 
-        // Konuşma bitince geri dön (max 4 saniye)
-        const msg = aiResult.voiceResponse || `${aiResult.title} kartı oluşturuldu`;
+        // Max 8 saniye bekle — uzun cümlelere de yeter
         const navTimeout = setTimeout(() => {
           if (router.canGoBack()) router.back();
           else router.replace('/');
-        }, 4000);
+        }, 8000);
 
         speak(msg).then(() => {
           clearTimeout(navTimeout);
           setTimeout(() => {
             if (router.canGoBack()) router.back();
             else router.replace('/');
-          }, 600);
+          }, 800);
         });
       } else {
         throw new Error('Kart oluşturulamadı');
@@ -832,6 +849,15 @@ export default function NewEntryScreen() {
           </View>
           <Text style={styles.doneTitle}>{createdCardTitle}</Text>
           <Text style={styles.doneSubtitle}>Kartınız başarıyla oluşturuldu!</Text>
+
+          {/* Sesli yanıt metni — TTS çalışsa da çalışmasa da kullanıcı okuyabilir */}
+          {createdVoiceResponse ? (
+            <View style={styles.doneVoiceBox}>
+              <Text style={styles.doneVoiceIcon}>🔊</Text>
+              <Text style={styles.doneVoiceText}>{createdVoiceResponse}</Text>
+            </View>
+          ) : null}
+
           <Text style={styles.doneRedirect}>Ana sayfaya dönülüyor...</Text>
         </View>
       </SafeAreaView>
@@ -1115,7 +1141,15 @@ const styles = StyleSheet.create({
   },
   doneCheck: { fontSize: 36, fontWeight: '700', color: '#FFF' },
   doneTitle: { fontSize: 20, fontWeight: '700', color: colors.dark, textAlign: 'center', marginBottom: 8 },
-  doneSubtitle: { fontSize: 16, color: colors.text, marginBottom: 12 },
+  doneSubtitle: { fontSize: 16, color: colors.text, marginBottom: 16 },
+  doneVoiceBox: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 8,
+    backgroundColor: colors.card, borderRadius: 14, padding: 16,
+    borderWidth: 1, borderColor: colors.border,
+    marginHorizontal: 24, marginBottom: 20, maxWidth: 320,
+  },
+  doneVoiceIcon: { fontSize: 18, marginTop: 1 },
+  doneVoiceText: { flex: 1, fontSize: 15, color: colors.text, lineHeight: 22 },
   doneRedirect: { fontSize: 13, color: colors.muted },
   errorDetail: { fontSize: 14, color: colors.muted, textAlign: 'center', marginBottom: 24, paddingHorizontal: 20 },
   retryButton: { backgroundColor: colors.dark, paddingHorizontal: 32, paddingVertical: 14, borderRadius: 12 },
