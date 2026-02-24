@@ -83,6 +83,7 @@ export default function NewEntryScreen() {
 
   const [purposeRecordingSeconds, setPurposeRecordingSeconds] = useState(0);
   const [isPurposeRecording, setIsPurposeRecording] = useState(false);
+  const [isPurposeTranscribing, setIsPurposeTranscribing] = useState(false);
   const lastPayloadRef = useRef<{ type: 'voice' | 'photo' | 'text' | 'document'; payload: { fileUri?: string; text?: string; fileType?: string; fileName?: string } } | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -371,30 +372,52 @@ export default function NewEntryScreen() {
     const rec = purposeRecordingRef.current;
     if (!rec) return;
     try {
+      // URI'yi durdurmadan ÖNCE al
+      const uri = rec.getURI();
       await rec.stopAndUnloadAsync();
       await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
-      const uri = rec.getURI();
       purposeRecordingRef.current = null;
       setIsPurposeRecording(false);
-      if (!uri) return;
 
-      // Transcribe the voice purpose
-      const session = await supabase.auth.getSession();
-      const accessToken = session.data.session?.access_token;
-      const formData = new FormData();
-      formData.append('file', { uri, type: 'audio/m4a', name: 'purpose.m4a' } as any);
-      const res = await fetch(`${WEB_API}/api/transcribe`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${accessToken}` },
-        body: formData,
-      });
-      if (res.ok) {
-        const { transcript: t } = await res.json();
-        if (t) setPurpose(t);
+      if (!uri) {
+        Alert.alert('Hata', 'Ses kaydedilemedi, tekrar deneyin.');
+        return;
+      }
+
+      // Transkripsiyon loading göster
+      setIsPurposeTranscribing(true);
+      try {
+        const session = await supabase.auth.getSession();
+        const accessToken = session.data.session?.access_token;
+        if (!accessToken) throw new Error('no session');
+
+        const formData = new FormData();
+        formData.append('file', { uri, type: 'audio/m4a', name: 'purpose.m4a' } as any);
+
+        const res = await fetch(`${WEB_API}/api/transcribe`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}` },
+          body: formData,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          // API { text: "..." } döndürüyor
+          const t = data.text || data.transcript || '';
+          if (t) setPurpose(t);
+          else Alert.alert('Anlaşılamadı', 'Ses net gelmedi, yazarak girin.');
+        } else {
+          const err = await res.json().catch(() => ({}));
+          Alert.alert('Hata', (err as any).error || 'Ses tanıma başarısız.');
+        }
+      } finally {
+        setIsPurposeTranscribing(false);
       }
     } catch (err) {
       console.error('[purposeRecording] Error:', err);
       setIsPurposeRecording(false);
+      setIsPurposeTranscribing(false);
+      Alert.alert('Hata', 'Ses kaydı işlenemedi.');
     }
   };
 
@@ -683,19 +706,28 @@ export default function NewEntryScreen() {
           {/* Alt buton çubuğu — her zaman aktif */}
           <View style={styles.purposeFooter}>
             <TouchableOpacity
-              style={[styles.purposeMicBtn, isPurposeRecording && styles.purposeMicBtnActive]}
+              style={[
+                styles.purposeMicBtn,
+                isPurposeRecording && styles.purposeMicBtnActive,
+                isPurposeTranscribing && styles.purposeMicBtnTranscribing,
+              ]}
               onPress={isPurposeRecording ? stopPurposeRecording : startPurposeRecording}
+              disabled={isPurposeTranscribing}
               activeOpacity={0.8}
             >
-              <Text style={styles.purposeMicIcon}>{isPurposeRecording ? '⏹' : '🎤'}</Text>
-              {isPurposeRecording && (
+              {isPurposeTranscribing ? (
+                <ActivityIndicator size="small" color={colors.dark} />
+              ) : (
+                <Text style={styles.purposeMicIcon}>{isPurposeRecording ? '⏹' : '🎤'}</Text>
+              )}
+              {isPurposeRecording && !isPurposeTranscribing && (
                 <Text style={styles.purposeMicSecs}>{purposeRecordingSeconds}s</Text>
               )}
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={styles.purposeSubmitBtn}
-              onPress={() => runWithPurpose(purpose.trim() || undefined)}
+              style={[styles.purposeSubmitBtn, isPurposeTranscribing && { opacity: 0.5 }]}
+              onPress={() => !isPurposeTranscribing && runWithPurpose(purpose.trim() || undefined)}
               activeOpacity={0.8}
             >
               <Text style={styles.purposeSubmitText}>
@@ -1241,6 +1273,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.border,
   },
   purposeMicBtnActive: { backgroundColor: colors.danger + '15', borderColor: colors.danger },
+  purposeMicBtnTranscribing: { backgroundColor: colors.border, borderColor: colors.border },
   purposeMicIcon: { fontSize: 22 },
   purposeMicSecs: { fontSize: 10, fontWeight: '700', color: colors.danger, marginTop: 2 },
   purposeSubmitBtn: {
