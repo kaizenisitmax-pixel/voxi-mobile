@@ -115,46 +115,85 @@ export default function NewEntryScreen() {
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
-  // TTS — kayıt oturumunu kapat, sonra konuş; Türkçe ses yoksa cihaz sesiyle devam et
+  // TTS — OpenAI echo sesiyle (premium), başarısız olursa expo-speech fallback
   const speak = (text: string): Promise<void> => {
     return new Promise(resolve => {
       (async () => {
+        // Ses oynatma moduna geç
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+        }).catch(() => {});
+
+        // Önce OpenAI TTS dene (echo sesi — premium, Türkçe)
         try {
-          // Kayıt modundan tam çıkış — iOS audio session geçişi için
-          await Audio.setAudioModeAsync({
-            allowsRecordingIOS: false,
-            playsInSilentModeIOS: true,
-            staysActiveInBackground: false,
-          }).catch(() => {});
+          const session = await supabase.auth.getSession();
+          const accessToken = session.data.session?.access_token;
+          if (!accessToken) throw new Error('no session');
 
-          // iOS audio session geçişi için yeterli süre bekle
-          await new Promise(r => setTimeout(r, 600));
-
-          Speech.stop();
-
-          // Önce Türkçe dene; Türkçe TTS kurulu değilse cihaz default sesiyle dene
-          const trySpeak = (lang?: string) => {
-            Speech.speak(text, {
-              language: lang,
-              rate: 1.0,
-              pitch: 0.85,
-              onDone: resolve,
-              onStopped: resolve,
-              onError: () => {
-                if (lang) {
-                  // Türkçe ses kurulu değil — dil belirtmeden tekrar dene
-                  trySpeak(undefined);
-                } else {
-                  resolve(); // Son fallback — sessiz geç
-                }
+          const controller = new AbortController();
+          const tid = setTimeout(() => controller.abort(), 12_000);
+          let ttsRes: Response;
+          try {
+            ttsRes = await fetch(`${WEB_API}/api/tts`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${accessToken}`,
               },
+              body: JSON.stringify({ text }),
+              signal: controller.signal,
             });
+          } finally {
+            clearTimeout(tid);
+          }
+
+          if (!ttsRes.ok) throw new Error(`TTS ${ttsRes.status}`);
+          const { audioBase64 } = await ttsRes.json() as { audioBase64?: string };
+          if (!audioBase64) throw new Error('empty audio');
+
+          // Geçici dosyaya yaz ve çal
+          const tempUri = `${FileSystem.cacheDirectory}voxi_tts_${Date.now()}.mp3`;
+          await FileSystem.writeAsStringAsync(tempUri, audioBase64, { encoding: 'base64' as any });
+
+          const { sound } = await Audio.Sound.createAsync(
+            { uri: tempUri },
+            { shouldPlay: true, volume: 1.0 },
+          );
+
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            sound.unloadAsync().catch(() => {});
+            FileSystem.deleteAsync(tempUri, { idempotent: true }).catch(() => {});
+            resolve();
           };
 
-          trySpeak('tr-TR');
-        } catch {
-          resolve();
+          sound.setOnPlaybackStatusUpdate(status => {
+            if (status.isLoaded && status.didJustFinish) finish();
+          });
+          setTimeout(finish, 15_000); // max 15 saniye
+          return;
+        } catch (err) {
+          console.warn('[speak] OpenAI TTS failed, expo-speech fallback:', err);
         }
+
+        // Fallback: expo-speech (cihaz TTS)
+        await new Promise(r => setTimeout(r, 400));
+        Speech.stop();
+        const trySpeak = (lang?: string) => {
+          Speech.speak(text, {
+            language: lang,
+            rate: 1.0,
+            pitch: 0.85,
+            onDone: resolve,
+            onStopped: resolve,
+            onError: () => (lang ? trySpeak(undefined) : resolve()),
+          });
+        };
+        trySpeak('tr-TR');
       })();
     });
   };
