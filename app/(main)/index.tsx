@@ -39,79 +39,44 @@ function getPriorityDot(priority: string): string | null {
   return ONCELIK_RENK[priority as Oncelik] ?? null;
 }
 
-function MiniAvatar({ name, size, style }: { name: string; size: number; style?: any }) {
+
+// ─── Inline üye avatar satırı ─────────────────────────────────────
+const MemberAvatarStrip = memo(function MemberAvatarStrip({ members }: { members?: CardMember[] }) {
+  const list = (members || []).filter(m => m.profiles?.full_name);
+  if (list.length === 0) return null;
+
+  const MAX = 4;
+  const visible = list.slice(0, MAX);
+  const extra   = list.length - MAX;
+  const AVATAR_SIZE = 18;
+  const OVERLAP     = 6;
+  const totalWidth  = AVATAR_SIZE + (visible.length - 1) * (AVATAR_SIZE - OVERLAP) + (extra > 0 ? AVATAR_SIZE - OVERLAP : 0);
+
+  const names = list.slice(0, 3).map(m => m.profiles!.full_name!.split(' ')[0]).join(', ')
+    + (list.length > 3 ? ` +${list.length - 3}` : '');
+
   return (
-    <View style={[{
-      width: size, height: size, borderRadius: size / 2,
-      backgroundColor: colors.avatar,
-      alignItems: 'center', justifyContent: 'center',
-      borderWidth: 2, borderColor: colors.card,
-    }, style]}>
-      <Text style={{ fontSize: size * 0.35, fontWeight: '700', color: colors.text }}>
-        {getInitials(name)}
-      </Text>
-    </View>
-  );
-}
-
-const AvatarCluster = memo(function AvatarCluster({ members }: { members?: CardMember[] }) {
-  const names = (members || [])
-    .map(m => m.profiles?.full_name || '?')
-    .filter(Boolean);
-
-  const count = names.length;
-
-  if (count === 0) {
-    return (
-      <View style={styles.avatarSingle}>
-        <Text style={styles.avatarSingleText}>?</Text>
+    <View style={styles.memberStrip}>
+      {/* Overlapping küçük avatarlar */}
+      <View style={[styles.avatarOverlapRow, { width: totalWidth }]}>
+        {visible.map((m, i) => (
+          <View
+            key={m.user_id}
+            style={[styles.miniAvatar, { left: i * (AVATAR_SIZE - OVERLAP), zIndex: visible.length - i }]}
+          >
+            <Text style={styles.miniAvatarText}>
+              {getInitials(m.profiles?.full_name || '?')}
+            </Text>
+          </View>
+        ))}
+        {extra > 0 && (
+          <View style={[styles.miniAvatar, styles.miniAvatarExtra, { left: visible.length * (AVATAR_SIZE - OVERLAP), zIndex: 0 }]}>
+            <Text style={styles.miniAvatarExtraText}>+{extra}</Text>
+          </View>
+        )}
       </View>
-    );
-  }
-
-  if (count === 1) {
-    return (
-      <View style={styles.clusterWrap}>
-        <MiniAvatar name={names[0]} size={52} style={{ borderWidth: 0 }} />
-      </View>
-    );
-  }
-
-  if (count === 2) {
-    return (
-      <View style={styles.clusterWrap}>
-        <MiniAvatar name={names[0]} size={36} style={{ position: 'absolute', top: 0, left: 0, zIndex: 2 }} />
-        <MiniAvatar name={names[1]} size={36} style={{ position: 'absolute', bottom: 0, right: 0, zIndex: 1 }} />
-      </View>
-    );
-  }
-
-  if (count === 3) {
-    return (
-      <View style={styles.clusterWrap}>
-        <MiniAvatar name={names[0]} size={30} style={{ position: 'absolute', top: 0, left: 11, zIndex: 3 }} />
-        <MiniAvatar name={names[1]} size={30} style={{ position: 'absolute', bottom: 0, left: 0, zIndex: 2 }} />
-        <MiniAvatar name={names[2]} size={30} style={{ position: 'absolute', bottom: 0, right: 0, zIndex: 1 }} />
-      </View>
-    );
-  }
-
-  // 4+ members
-  const extra = count - 3;
-  return (
-    <View style={styles.clusterWrap}>
-      <MiniAvatar name={names[0]} size={28} style={{ position: 'absolute', top: 0, left: 0, zIndex: 4 }} />
-      <MiniAvatar name={names[1]} size={28} style={{ position: 'absolute', top: 0, right: 0, zIndex: 3 }} />
-      <MiniAvatar name={names[2]} size={28} style={{ position: 'absolute', bottom: 0, left: 0, zIndex: 2 }} />
-      <View style={[{
-        position: 'absolute', bottom: 0, right: 0, zIndex: 1,
-        width: 28, height: 28, borderRadius: 14,
-        backgroundColor: colors.dark,
-        alignItems: 'center', justifyContent: 'center',
-        borderWidth: 2, borderColor: colors.card,
-      }]}>
-        <Text style={{ fontSize: 10, fontWeight: '700', color: '#FFFFFF' }}>+{extra}</Text>
-      </View>
+      {/* İsimler */}
+      <Text style={styles.memberNames} numberOfLines={1}>{names}</Text>
     </View>
   );
 });
@@ -119,16 +84,10 @@ const AvatarCluster = memo(function AvatarCluster({ members }: { members?: CardM
 const CardItem = memo(function CardItem({ card, onPress }: { card: Card; onPress: () => void }) {
   const dotColor = getPriorityDot(card.priority);
   const customerName = card.customers?.company_name;
-  const memberCount = card.card_members?.length || 0;
-  const memberNames = (card.card_members || [])
-    .slice(0, 3)
-    .map(m => m.profiles?.full_name?.split(' ')[0])
-    .filter(Boolean)
-    .join(', ');
 
-  const isUrgent = card.priority === 'urgent';
+  const isUrgent     = card.priority === 'urgent';
   const isInProgress = card.status === 'in_progress';
-  const hasUnread = (card.unread_count || 0) > 0;
+  const hasUnread    = (card.unread_count || 0) > 0;
 
   return (
     <TouchableOpacity
@@ -137,7 +96,13 @@ const CardItem = memo(function CardItem({ card, onPress }: { card: Card; onPress
       activeOpacity={0.7}
       accessibilityLabel={`${card.title} kartını aç`}
     >
-      <AvatarCluster members={card.card_members} />
+      {/* Sol: Kart avatarı (kart baş harfleri) */}
+      <View style={styles.cardAvatar}>
+        <Text style={styles.cardAvatarText}>{getInitials(card.title)}</Text>
+        {isInProgress && (
+          <View style={styles.progressDot} />
+        )}
+      </View>
 
       <View style={styles.cardContent}>
         <View style={styles.cardTop}>
@@ -151,8 +116,10 @@ const CardItem = memo(function CardItem({ card, onPress }: { card: Card; onPress
         </View>
 
         <View style={styles.cardBottom}>
-          <Text style={styles.cardPreview} numberOfLines={1}>
-            {card.last_message_preview || card.description || 'Yeni kart'}
+          <Text style={[styles.cardPreview, hasUnread && styles.cardPreviewBold]} numberOfLines={1}>
+            {customerName
+              ? `${customerName}${card.last_message_preview ? '  ·  ' + card.last_message_preview : ''}`
+              : (card.last_message_preview || card.description || 'Yeni kart')}
           </Text>
           {hasUnread && (
             <View style={styles.badge}>
@@ -161,6 +128,7 @@ const CardItem = memo(function CardItem({ card, onPress }: { card: Card; onPress
           )}
         </View>
 
+        {/* Alt meta: badge'ler + üye avatarları */}
         <View style={styles.cardMeta}>
           {isUrgent && (
             <View style={styles.acilBadge}>
@@ -169,20 +137,11 @@ const CardItem = memo(function CardItem({ card, onPress }: { card: Card; onPress
           )}
           {isInProgress && !isUrgent && (
             <View style={styles.devamBadge}>
-              <Text style={styles.devamBadgeText}>⏳ Devam Ediyor</Text>
+              <Text style={styles.devamBadgeText}>⏳ Devam</Text>
             </View>
           )}
-          {customerName && (
-            <Text style={styles.metaTag} numberOfLines={1}>
-              {customerName}
-              {memberNames ? ` · ${memberNames}${memberCount > 3 ? ` +${memberCount - 3}` : ''}` : ''}
-            </Text>
-          )}
-          {!customerName && memberNames && (
-            <Text style={styles.metaTag} numberOfLines={1}>
-              {memberNames}{memberCount > 3 ? ` +${memberCount - 3}` : ''}
-            </Text>
-          )}
+          {/* Üye avatar satırı */}
+          <MemberAvatarStrip members={card.card_members} />
         </View>
       </View>
     </TouchableOpacity>
@@ -331,51 +290,73 @@ export default function HomeScreen() {
   );
 }
 
+const MINI_AVATAR = 18;
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   cardItem: {
     flexDirection: 'row', paddingHorizontal: 20, paddingVertical: 14,
     backgroundColor: colors.card, gap: 14, alignItems: 'flex-start',
   },
-  cardItemUrgent: {
-    borderLeftWidth: 3, borderLeftColor: '#FF3B30',
+  cardItemUrgent: { borderLeftWidth: 3, borderLeftColor: '#FF3B30' },
+
+  // Sol avatar (kart baş harfleri)
+  cardAvatar: {
+    width: 48, height: 48, borderRadius: 24, backgroundColor: colors.avatar,
+    alignItems: 'center', justifyContent: 'center', position: 'relative',
   },
-  clusterWrap: {
-    width: 52, height: 52, position: 'relative',
+  cardAvatarText: { fontSize: 15, fontWeight: '700', color: colors.text },
+  progressDot: {
+    position: 'absolute', bottom: 0, right: 0,
+    width: 12, height: 12, borderRadius: 6,
+    backgroundColor: colors.dark, borderWidth: 2, borderColor: colors.card,
   },
-  avatarSingle: {
-    width: 52, height: 52, borderRadius: 26, backgroundColor: colors.avatar,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  avatarSingleText: { fontSize: 16, fontWeight: '700', color: colors.text },
+
   cardContent: { flex: 1, paddingTop: 2 },
-  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 },
   cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, marginRight: 8 },
   cardTitle: { fontSize: 16, fontWeight: '500', color: colors.dark, flex: 1 },
   cardTitleBold: { fontWeight: '700' },
   cardTime: { fontSize: 12, color: colors.muted, flexShrink: 0 },
-  cardBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  cardBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 },
   priorityDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
   cardPreview: { fontSize: 14, color: colors.muted, flex: 1 },
+  cardPreviewBold: { fontWeight: '600', color: colors.text },
   badge: {
     backgroundColor: colors.dark, borderRadius: 10,
     minWidth: 20, height: 20, paddingHorizontal: 6,
     alignItems: 'center', justifyContent: 'center', marginLeft: 8,
   },
   badgeText: { fontSize: 11, fontWeight: '700', color: '#FFFFFF' },
-  cardMeta: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
+
+  cardMeta: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 5 },
   acilBadge: {
-    backgroundColor: '#FFF0EE', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
+    backgroundColor: '#FFF0EE', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2,
     borderWidth: 1, borderColor: '#FF3B30',
   },
   acilBadgeText: { fontSize: 11, fontWeight: '700', color: '#FF3B30' },
   devamBadge: {
-    backgroundColor: '#F5F3EF', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
+    backgroundColor: '#F5F3EF', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2,
     borderWidth: 1, borderColor: colors.border,
   },
   devamBadgeText: { fontSize: 11, fontWeight: '600', color: colors.text },
-  metaTag: { fontSize: 12, color: colors.muted },
-  separator: { height: 1, backgroundColor: colors.border, marginLeft: 86 },
+
+  // Üye avatar satırı
+  memberStrip: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  avatarOverlapRow: { height: MINI_AVATAR, position: 'relative' },
+  miniAvatar: {
+    position: 'absolute', top: 0,
+    width: MINI_AVATAR, height: MINI_AVATAR, borderRadius: MINI_AVATAR / 2,
+    backgroundColor: colors.avatar,
+    borderWidth: 1.5, borderColor: colors.card,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  miniAvatarText: { fontSize: 7, fontWeight: '700', color: colors.text },
+  miniAvatarExtra: { backgroundColor: colors.dark },
+  miniAvatarExtraText: { fontSize: 7, fontWeight: '700', color: '#FFF' },
+  memberNames: { fontSize: 11, color: colors.muted, flex: 1 },
+
+  separator: { height: 1, backgroundColor: colors.border, marginLeft: 82 },
   empty: { alignItems: 'center', paddingTop: 80 },
   emptyContainer: { flex: 1 },
   emptyIcon: { fontSize: 48, marginBottom: 16 },
