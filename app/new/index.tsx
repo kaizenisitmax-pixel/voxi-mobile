@@ -9,8 +9,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Audio } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import * as Speech from 'expo-speech';
-import * as FileSystem from 'expo-file-system';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCards } from '../../hooks/useCards';
 import { supabase } from '../../lib/supabase';
@@ -76,9 +74,7 @@ export default function NewEntryScreen() {
   const [text, setText] = useState('');
   const [creating, setCreating] = useState(false);
   const [createdCardTitle, setCreatedCardTitle] = useState('');
-  const [createdVoiceResponse, setCreatedVoiceResponse] = useState('');
   const [showTemplates, setShowTemplates] = useState(false);
-  // Seçili takip görevleri (insight index'leri)
   const [selectedInsights, setSelectedInsights] = useState<Set<number>>(new Set());
   const [industryId, setIndustryId] = useState<number | null>(null);
   const [purpose, setPurpose] = useState('');
@@ -98,7 +94,6 @@ export default function NewEntryScreen() {
     getSelectedIndustryId().then(setIndustryId);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
-      Speech.stop();
     };
   }, []);
 
@@ -118,108 +113,6 @@ export default function NewEntryScreen() {
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
-  // TTS — OpenAI echo (premium erkek ses), başarısız olursa expo-speech fallback
-  const speak = (text: string): Promise<void> => {
-    return new Promise(resolve => {
-      (async () => {
-        let soundRef: Audio.Sound | null = null;
-
-        // Oynatma moduna geç
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: false,
-        }).catch(() => {});
-
-        try {
-          const session = await supabase.auth.getSession();
-          const accessToken = session.data.session?.access_token;
-          if (!accessToken) throw new Error('oturum-yok');
-
-          // OpenAI TTS isteği
-          const controller = new AbortController();
-          const tid = setTimeout(() => controller.abort(), 15_000);
-          let ttsRes: Response;
-          try {
-            ttsRes = await fetch(`${WEB_API}/api/tts`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${accessToken}`,
-              },
-              body: JSON.stringify({ text }),
-              signal: controller.signal,
-            });
-          } finally {
-            clearTimeout(tid);
-          }
-
-          if (!ttsRes.ok) {
-            const body = await ttsRes.text().catch(() => '');
-            throw new Error(`HTTP-${ttsRes.status}: ${body.slice(0, 120)}`);
-          }
-
-          const data = await ttsRes.json() as { audioBase64?: string };
-          if (!data.audioBase64) throw new Error('bos-ses-verisi');
-
-          // MP3 dosyasını cache'e yaz
-          const tempUri = `${FileSystem.cacheDirectory}voxi_tts_${Date.now()}.mp3`;
-          await FileSystem.writeAsStringAsync(tempUri, data.audioBase64, {
-            encoding: FileSystem.EncodingType.Base64,
-          });
-
-          // Yükle, sonra ayrıca çal (shouldPlay:true yerine explicit playAsync)
-          const { sound } = await Audio.Sound.createAsync({ uri: tempUri });
-          soundRef = sound;
-
-          let finished = false;
-          const finish = () => {
-            if (finished) return;
-            finished = true;
-            soundRef?.unloadAsync().catch(() => {});
-            soundRef = null;
-            FileSystem.deleteAsync(tempUri, { idempotent: true }).catch(() => {});
-            resolve();
-          };
-
-          sound.setOnPlaybackStatusUpdate(s => {
-            if (s.isLoaded && s.didJustFinish) finish();
-          });
-
-          await sound.playAsync();
-          setTimeout(finish, 20_000); // güvenlik timeout
-          return; // expo-speech'e düşme
-
-        } catch (err) {
-          soundRef?.unloadAsync().catch(() => {});
-          soundRef = null;
-          // Hata mesajını kullanıcıya göster (debug)
-          const msg = err instanceof Error ? err.message : String(err);
-          console.warn('[speak] OpenAI TTS hata:', msg);
-          Alert.alert(
-            'Ses Hatası (Debug)',
-            `OpenAI TTS başarısız:\n${msg}\n\nCihaz sesi kullanılıyor.`,
-            [{ text: 'Tamam' }],
-          );
-        }
-
-        // expo-speech fallback
-        await new Promise(r => setTimeout(r, 300));
-        Speech.stop();
-        const tryLocal = (lang?: string) => {
-          Speech.speak(text, {
-            language: lang,
-            rate: 1.0,
-            pitch: 0.85,
-            onDone: resolve,
-            onStopped: resolve,
-            onError: () => (lang ? tryLocal(undefined) : resolve()),
-          });
-        };
-        tryLocal('tr-TR');
-      })();
-    });
-  };
 
   // ═══════════════════════════
   //     VOICE RECORDING
@@ -545,42 +438,29 @@ export default function NewEntryScreen() {
       });
 
       if (cardResult?.card) {
-        // Seçili insight'lardan takip görevleri oluştur
+        // Seçili takip görevlerini oluştur
         const insights = aiResult.insights || [];
         const followUps = insights.filter((_, i) => selectedInsights.has(i));
         for (const insight of followUps) {
           await createCard({
             title: insight.length > 75 ? insight.slice(0, 72) + '...' : insight,
-            description: `Takip görevi — ${aiResult.title} kartından oluşturuldu.\n\n${insight}`,
+            description: `Takip görevi — ${aiResult.title} kartından.\n\n${insight}`,
             source_type: 'text',
             customer_id: customerId,
             priority: 'normal',
             labels: ['takip'],
-          }).catch(() => {}); // Takip görevi başarısız olsa ana kart etkilenmesin
+          }).catch(() => {});
         }
 
-        const followUpMsg = followUps.length > 0
-          ? ` ${followUps.length} takip görevi de eklendi.`
-          : '';
-        const msg = (aiResult.voiceResponse || `${aiResult.title} kartı oluşturuldu`) + followUpMsg;
         setCreatedCardTitle(aiResult.title);
-        setCreatedVoiceResponse(msg);
         setMode('done');
         Vibration.vibrate(100);
 
-        // Max 8 saniye bekle — uzun cümlelere de yeter
-        const navTimeout = setTimeout(() => {
+        // 1.5 saniye done ekranı göster, sonra geri dön
+        setTimeout(() => {
           if (router.canGoBack()) router.back();
           else router.replace('/');
-        }, 8000);
-
-        speak(msg).then(() => {
-          clearTimeout(navTimeout);
-          setTimeout(() => {
-            if (router.canGoBack()) router.back();
-            else router.replace('/');
-          }, 800);
-        });
+        }, 1500);
       } else {
         throw new Error('Kart oluşturulamadı');
       }
@@ -910,44 +790,6 @@ export default function NewEntryScreen() {
               </View>
             )}
 
-            {/* Takip Görevleri — seçilenler kart oluşturulunca ayrı görev olarak eklenir */}
-            {insights.length > 0 && (
-              <View style={styles.insightsSection}>
-                <View style={styles.insightsHeader}>
-                  <Text style={styles.sectionTitle}>📌 Takip Görevi Ekle</Text>
-                  <Text style={styles.insightsHint}>
-                    {selectedInsights.size > 0
-                      ? `${selectedInsights.size} görev seçildi`
-                      : 'İşaretledikleriniz görev olarak oluşturulur'}
-                  </Text>
-                </View>
-                {insights.map((insight, i) => {
-                  const selected = selectedInsights.has(i);
-                  return (
-                    <TouchableOpacity
-                      key={i}
-                      style={[styles.insightRow, selected && styles.insightRowSelected]}
-                      onPress={() => {
-                        setSelectedInsights(prev => {
-                          const next = new Set(prev);
-                          if (next.has(i)) next.delete(i); else next.add(i);
-                          return next;
-                        });
-                      }}
-                      activeOpacity={0.7}
-                    >
-                      <View style={[styles.insightCheck, selected && styles.insightCheckSelected]}>
-                        {selected && <Text style={styles.insightCheckMark}>✓</Text>}
-                      </View>
-                      <Text style={[styles.insightText, selected && styles.insightTextSelected]}>
-                        {insight}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            )}
-
             <View style={{ height: 100 }} />
           </ScrollView>
         </KeyboardAvoidingView>
@@ -955,11 +797,7 @@ export default function NewEntryScreen() {
         {/* Fixed Create Button */}
         <View style={styles.confirmFooter}>
           <TouchableOpacity style={styles.createBtn} onPress={handleCreateCard} activeOpacity={0.8}>
-            <Text style={styles.createBtnText}>
-              {selectedInsights.size > 0
-                ? `🚀 Kart + ${selectedInsights.size} Görev Oluştur`
-                : '🚀 Kart Oluştur'}
-            </Text>
+            <Text style={styles.createBtnText}>🚀 Kart Oluştur</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -988,15 +826,6 @@ export default function NewEntryScreen() {
           </View>
           <Text style={styles.doneTitle}>{createdCardTitle}</Text>
           <Text style={styles.doneSubtitle}>Kartınız başarıyla oluşturuldu!</Text>
-
-          {/* Sesli yanıt metni — TTS çalışsa da çalışmasa da kullanıcı okuyabilir */}
-          {createdVoiceResponse ? (
-            <View style={styles.doneVoiceBox}>
-              <Text style={styles.doneVoiceIcon}>🔊</Text>
-              <Text style={styles.doneVoiceText}>{createdVoiceResponse}</Text>
-            </View>
-          ) : null}
-
           <Text style={styles.doneRedirect}>Ana sayfaya dönülüyor...</Text>
         </View>
       </SafeAreaView>
