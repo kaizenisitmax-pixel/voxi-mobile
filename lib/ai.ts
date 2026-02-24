@@ -168,9 +168,9 @@ export async function smartCreate(
     hasBase64: !!(body.fileBase64),
   });
 
-  // 55s client timeout — just under Vercel's 60s maxDuration
+  // 58s client timeout — just under Vercel's 60s maxDuration
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 55_000);
+  const timeoutId = setTimeout(() => controller.abort(), 58_000);
 
   let response: Response;
   try {
