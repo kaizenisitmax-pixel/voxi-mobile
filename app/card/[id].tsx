@@ -13,6 +13,7 @@ import { colors } from '../../lib/colors';
 import AddMemberModal from '../../components/AddMemberModal';
 import type { Card, CardMember } from '../../hooks/useCards';
 import { ONCELIK_ETIKET, KART_DURUMU_ETIKET, ROL_ETIKET, type Oncelik, type KartDurumu, type Rol } from '../../lib/constants';
+import ActionModal, { type ActionType } from '../../components/ActionModal';
 
 type Tab = 'chat' | 'depot';
 
@@ -314,6 +315,7 @@ function MessageBubble({ message, isMe }: { message: ChatMessage; isMe: boolean 
 function DepotTab({ cardId, card }: { cardId: string; card: Card }) {
   const { items, mediaItems, loading, addItem } = useDepot(cardId);
   const router = useRouter();
+  const [activeAction, setActiveAction] = useState<ActionType | null>(null);
 
   const customer = card.customers;
 
@@ -364,35 +366,45 @@ function DepotTab({ cardId, card }: { cardId: string; card: Card }) {
       {/* Actions Section */}
       <View style={styles.depotSection}>
         <Text style={styles.depotSectionTitle}>AKSİYONLAR</Text>
-        <ActionButton icon="📋" label="Teklif Oluştur" onPress={() => Alert.alert('Bilgi', 'Web üzerinden teklif oluşturabilirsiniz. voxi.com.tr')} />
-        <ActionButton icon="📅" label="Hatırlatma Kur" onPress={() => {
-          addItem({ type: 'reminder', title: 'Hatırlatma', metadata: { date: new Date().toISOString() } });
-        }} />
-        <ActionButton icon="📧" label="E-posta Gönder" onPress={() => {
-          const email = customer?.email;
-          if (email) {
-            Linking.openURL(`mailto:${email}`);
-          } else {
-            Alert.alert('Bilgi', 'Müşteri e-posta adresi bulunamadı');
-          }
-        }} />
-        <ActionButton icon="💬" label="WhatsApp Gönder" onPress={() => {
-          const phone = customer?.phone?.replace(/\s/g, '');
-          if (phone) {
-            Linking.openURL(`whatsapp://send?phone=${phone}`);
-          } else {
-            Alert.alert('Bilgi', 'Müşteri telefon numarası bulunamadı');
-          }
-        }} />
-        <ActionButton icon="📱" label="SMS Gönder" onPress={() => {
-          const phone = customer?.phone;
-          if (phone) {
-            Linking.openURL(`sms:${phone}`);
-          } else {
-            Alert.alert('Bilgi', 'Müşteri telefon numarası bulunamadı');
-          }
-        }} />
+        <View style={styles.actionGrid}>
+          <ActionButton
+            icon="📋" label="Teklif Oluştur"
+            sub="AI ile hazırla"
+            onPress={() => setActiveAction('proposal')}
+          />
+          <ActionButton
+            icon="⏰" label="Hatırlatma Kur"
+            sub="Bildirim planla"
+            onPress={() => setActiveAction('reminder')}
+          />
+          <ActionButton
+            icon="📧" label="E-posta"
+            sub={customer?.email || 'Adres ekle'}
+            onPress={() => setActiveAction('email')}
+          />
+          <ActionButton
+            icon="💬" label="WhatsApp"
+            sub={customer?.phone || 'Numara ekle'}
+            onPress={() => setActiveAction('whatsapp')}
+          />
+          <ActionButton
+            icon="📱" label="SMS"
+            sub={customer?.phone || 'Numara ekle'}
+            onPress={() => setActiveAction('sms')}
+          />
+        </View>
       </View>
+
+      {/* Action Modal */}
+      {activeAction && (
+        <ActionModal
+          visible={!!activeAction}
+          actionType={activeAction}
+          card={card}
+          onClose={() => setActiveAction(null)}
+          onSaved={() => addItem({ type: 'reminder', title: 'Hatırlatma kuruldu', metadata: {} })}
+        />
+      )}
 
       {/* History Section */}
       <View style={styles.depotSection}>
@@ -444,12 +456,17 @@ function DepotTab({ cardId, card }: { cardId: string; card: Card }) {
   );
 }
 
-function ActionButton({ icon, label, onPress }: { icon: string; label: string; onPress: () => void }) {
+function ActionButton({ icon, label, sub, onPress }: { icon: string; label: string; sub?: string; onPress: () => void }) {
   return (
-    <TouchableOpacity style={styles.actionBtn} onPress={onPress}>
-      <Text style={styles.actionIcon}>{icon}</Text>
-      <Text style={styles.actionLabel}>{label}</Text>
-      <Text style={styles.chevron}>→</Text>
+    <TouchableOpacity style={styles.actionBtn} onPress={onPress} activeOpacity={0.7}>
+      <View style={styles.actionIconWrap}>
+        <Text style={styles.actionIcon}>{icon}</Text>
+      </View>
+      <View style={styles.actionTextWrap}>
+        <Text style={styles.actionLabel}>{label}</Text>
+        {sub && <Text style={styles.actionSub} numberOfLines={1}>{sub}</Text>}
+      </View>
+      <Text style={styles.chevron}>›</Text>
     </TouchableOpacity>
   );
 }
@@ -555,13 +572,21 @@ const styles = StyleSheet.create({
   },
   mediaIcon: { fontSize: 24, marginBottom: 4 },
   mediaName: { fontSize: 10, color: colors.muted, paddingHorizontal: 4 },
+  actionGrid: { gap: 8 },
   actionBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: colors.card, padding: 14, borderRadius: 12,
+    backgroundColor: colors.card, padding: 14, borderRadius: 14,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  actionIconWrap: {
+    width: 40, height: 40, borderRadius: 12, backgroundColor: colors.bg,
+    alignItems: 'center', justifyContent: 'center',
     borderWidth: 1, borderColor: colors.border,
   },
   actionIcon: { fontSize: 20 },
-  actionLabel: { flex: 1, fontSize: 15, fontWeight: '500', color: colors.dark },
+  actionTextWrap: { flex: 1 },
+  actionLabel: { fontSize: 15, fontWeight: '600', color: colors.dark },
+  actionSub: { fontSize: 12, color: colors.muted, marginTop: 1 },
   historyItem: { flexDirection: 'row', gap: 12, paddingVertical: 6 },
   historyTime: { fontSize: 12, color: colors.muted, width: 80 },
   historyText: { fontSize: 14, color: colors.text, flex: 1 },
